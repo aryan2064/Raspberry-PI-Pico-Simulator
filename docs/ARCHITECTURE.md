@@ -62,6 +62,13 @@ Represents one connection point on a component.
   `machine.PWM` shim will build on. See `docs/DECISIONS.md`.
 - `netId` — which net (group of connected pins) this pin currently
   belongs to. Set by `Circuit.resolveNets()`.
+- `hasConflict` — `boolean`, default `false`. Diagnostic flag set by
+  `Circuit.propagate()`: true when this pin's net has **two or more
+  driver pins** (either channel — digital `OUT` pins or pins carrying an
+  `analogValue`). It never changes how the net resolves (`value`/`
+  analogValue` still fall back to `FLOATING`/`null`); it exists so the
+  UI can warn about a live short-circuit. See "Conflict detection"
+  below.
 
 ### `Wire`
 
@@ -101,6 +108,7 @@ abstract class Component {
 ```ts
 type RenderInfo =
   | { type: "led"; isOn: boolean }
+  | { type: "button"; isPressed: boolean }
   | { type: "pico_board" };
 ```
 
@@ -131,11 +139,10 @@ separate:
    b. If exactly one driver, the net's value is that driver's value.
    c. If zero drivers, the net is `FLOATING`.
    d. If more than one driver, this is a real conflict (two outputs
-      fighting over one net) — currently this silently resolves to
-      `FLOATING` as a placeholder. **This is a known, deliberate gap**,
-      not an oversight: proper conflict/short-circuit detection belongs
-      in the validation layer (see Roadmap), not baked into core net
-      resolution.
+      fighting over one net) — the net resolves to `FLOATING` as a
+      placeholder, and every pin in it is flagged `hasConflict = true`
+      (diagnostic only; see "Conflict detection" below). Value
+      resolution itself is untouched.
    e. Propagate the resolved value to every `IN`-mode pin in the net.
    f. **Analog propagation (separate channel).** Mirrors steps a–e but on
       `analogValue`, not `value`. For each net, find pins where
@@ -144,9 +151,8 @@ separate:
       net. If zero, leave `IN` pins' `analogValue` as `null`. If more
       than one, multiple analog drivers are fighting over one net — the
       same kind of conflict as the digital case, currently resolving to
-      `null` as a placeholder for the same reason (real conflict/short-
-      circuit handling belongs in the validation layer, not core net
-      resolution).
+      `null` as a placeholder (and flagging the net, like the digital
+      pass).
    g. Call `update(dt)` on every component, in registration order.
    h. **Repeat the digital and analog propagation passes (only) — no second
       `update()` call.** A component that writes its own output pin from
@@ -154,6 +160,23 @@ separate:
       `pressed`) has that value re-propagated to listening pins within the
       **same** `tick()`, rather than one tick later. This is why an input
       press is visible to net listeners before `tick()` returns.
+
+### Conflict detection (`hasConflict`)
+
+Both propagation passes compute the conflict condition as
+`digital drivers > 1 || analog drivers > 1` per net (each pass re-reads
+*both* channel counts, so a digital-only conflict survives the analog
+pass and vice versa) and stamp `hasConflict` onto every pin in the net.
+The resolved `value`/`analogValue` semantics are unchanged — the flag is
+purely diagnostic, which is why it lives in the engine's `Pin` and not
+as a new `PinValue` variant: components and the `machine` shim need zero
+changes and keep reading `FLOATING`/`null` exactly as before. The worker
+surfaces the flag in every snapshot as `conflictedPinIds` (the uuid of
+each flagged pin) plus each component's `pins` (`id` + `label`); the
+canvas resolves those uuids back to wire endpoints through that `pins`
+mapping and renders conflicted connections as red, dashed wires with a
+conflict-count banner. The user can still wire anything — the goal is to
+surface the mistake, not prevent it (`docs/DECISIONS.md`).
 
 ## Why digital nets instead of a circuit solver
 
@@ -188,17 +211,27 @@ non-sensor components never need to stub out a meaningless method. Only
 implement this when actually building the first sensor component — see
 `docs/ROADMAP.md`.
 
-## Python execution model (planned, not yet implemented)
+## Python execution model (implemented)
 
 - **Pyodide** (CPython compiled to WebAssembly) runs entirely
   client-side. Chosen over a sandboxed backend because: no server
   infra, no arbitrary-code-execution security surface to defend
   (browser sandboxing handles that for free), instant iteration with
-  no network round trip, and works offline once loaded.
-- Must run inside a **Web Worker**, not the main thread — otherwise a
-  running simulation freezes the canvas/UI. This must be designed in
-  from the start of the execution module, not retrofitted after
-  noticing jank.
+  no network round trip, and works offline once loaded (cached).
+- Runs inside a **Web Worker**, not the main thread — otherwise a
+  running simulation freezes the canvas/UI.
+- Because user code runs via **`pyodide.runPythonAsync`** (not
+  `runPython`), a script's `time.sleep` can free the worker's JS event
+  loop for the whole duration *without* the script yielding control in
+  any Python-visible way: Pyodide's JSPI
+  (`pyodide.ffi.run_sync(asyncio.sleep(...))`) suspends the Python
+  task itself. At boot the worker probes
+  `pyodide.ffi.can_run_sync()` — from inside a `runPythonAsync` call
+  stack, because a top-level call reports `False` even in a JSPI-capable
+  runtime (that is run_sync's precondition) — and passes the result to
+  the shim bridge as `canRunSync`; where it is false the shim falls back
+  to the historical busy-wait `time.sleep` (see `` `machine.Pin`
+  semantics and limits``).
 - The `machine` module (specifically `machine.Pin` first, later
   `machine.PWM`, `machine.ADC`, `machine.I2C` as needed) is shimmed:
   user calls like `machine.Pin(15, machine.Pin.OUT)` and
@@ -206,3 +239,104 @@ implement this when actually building the first sensor component — see
   `Pin` object on the `PicoBoard` component in the engine layer. User
   code is real, valid MicroPython — it's the library underneath that's
   fake.
+
+### Why the Circuit physically lives inside the worker
+
+`machine.Pin` writes must be *immediately* visible to the rest of the
+simulation **and** to subsequent Python reads. A Web Worker cannot share
+JS object references with the main thread — postMessage deep-clones
+state. If the engine `Circuit` lived on the main thread, every Python
+`Pin.value(1)` would have to round-trip through a message and the Python
+code would read stale values from behind the clone boundary. Instead
+the **worker owns the live `Circuit`** (`CircuitHost` in
+`src/execution/worker-core.ts`); the shim's bridge calls
+`host.setupPin/readPin/writePin` directly on the same thread, which do
+`circuit.tick()` in place. Worker and UI then communicate only via small,
+structured `postMessage` payloads — never shared objects.
+
+### Message protocol (single source of truth: `src/execution/messages.ts`)
+
+Main thread → worker:
+
+- `{ type: "addComponent", componentId, kind }` — create a component
+  with an id the main thread chose (the engine constructors accept an
+  optional id).
+- `{ type: "connect", wireId, pinOwnerIdA, pinLabelA, pinOwnerIdB, pinLabelB }`
+  — `wireId` is the main thread's connection id; the worker maps it to
+  the engine's internally-generated `Wire.id` because
+  `Circuit.connect()` generates its own.
+- `{ type: "disconnect", wireId }` — remove that connection.
+- `{ type: "press" | "release", componentId }` — button input relay.
+- `{ type: "removeComponent", componentId }` — delete a placed component;
+  the worker removes it (cascading every wire touching its pins) and
+  refuses the PicoBoard with an error.
+- `{ type: "run", code }` — run MicroPython in Pyodide.
+
+Worker → main thread:
+
+- `{ type: "snapshot", components: [{ id, renderInfo, pins: [{ id, label }] }], conflictedPinIds: string[] }`
+  — posted after every edit, after every bridge write, and continuously
+  by the worker's own 60fps tick loop. This is the **only** render data
+  the UI sees. `pins` gives the main thread each pin's engine uuid +
+  label; `conflictedPinIds` lists every pin whose net currently has
+  multiple drivers (see "Conflict detection" above) so the canvas can
+  flag the affected wires.
+- `{ type: "stdout", text }` / `{ type: "error", message }` — batched
+  script output routed to the output panel.
+- `{ type: "ready" }` — Pyodide + shim installed.
+
+### Topology replay — how wiring survives a terminated worker
+
+The main thread keeps an authoritative **topology record** (just ids +
+pin labels, not engine objects). Why: **Stop is deliberately
+non-cooperative.** A genuinely stuck script (`while True:` with no
+yield, or `sleep()` spinning) could never process a "stop" message, so
+Stop calls `worker.terminate()` unconditionally. `terminate()` destroys
+Pyodide and everything in worker memory — so the UI immediately spawns
+a fresh worker and replays every `addComponent` + `connect` message from
+the topology record. This is also exactly how the app initializes, so a
+rebuild is just "start from scratch, same wiring." Palette-placed parts
+are appended to the same record, so they survive Stop like the demo
+wiring; their canvas **positions** are plain React UI state, kept
+separately from the topology and never sent to the worker — a respawn
+never moves a placed part.
+
+### `machine.Pin` semantics and limits
+
+- `machine.Pin(id, machine.Pin.IN|OUT)` maps id → board GPIO
+  (`GPIO0..GPIO28`); `value()` reads (`IN`) or writes (`OUT`) the pin's
+  `PinValue`. Writes go through the bridge to `CircuitHost.writePin` and
+  immediately `tick()` the circuit, so a wired LED lights without the
+  frame loop running.
+- `machine.PWM`, `machine.ADC`, `machine.I2C`, and `machine.time` beyond
+  `sleep()` are **out of scope for now** — importing them
+  raises a normal Python `ImportError`, surfaced to the output panel.
+- `time.sleep()` is non-blocking where JSPI (stack switching) is
+  available: the shim calls
+  `pyodide.ffi.run_sync(asyncio.sleep(seconds))`, which suspends the
+  Python task and leaves the worker's JS event loop (sim tick, button
+  relay) running for the whole sleep — so the sim stays live. Where
+  JSPI is unavailable (non-JSPI browsers — e.g. Firefox or older
+  webviews) it falls back to the
+  busy-wait on `time.monotonic()`, which blocks only the worker thread
+  but also blocks the sim loop — acceptable for the supported scripts,
+  and the same behavior the app had before JSPI. A precise *wakeable*
+  sleep (interrupt it from the main thread mid-sleep) would still need
+  SharedArrayBuffer + Atomics and cross-origin isolation; JSPI bought
+  the part that matters without the hosting cost. See
+  `docs/DECISIONS.md`.
+- Bridge install detail (a real bug we caught and fixed): the shim
+  imports the bridge as `from js import __pico_bridge`, and Pyodide's
+  `js` module proxies the JS **global scope**, not Python's main
+  namespace. The bridge must therefore be attached to `globalThis`
+  (setting it only via `pyodide.globals` raises ImportError). Verified
+  by `npm run verify:python`, which runs the real shim against a real
+  Pyodide in Node.
+
+### Throttling & frame timing
+
+The worker runs its own `setInterval(..., 1000/60)` tick loop (plus a
+snapshot immediately after each edit and after each Python `Pin`
+write). The UI thread never ticks the engine — it has none. This keeps
+the paint-side React work cheap and decoupled: the canvas just renders
+whatever snapshot it was last sent.

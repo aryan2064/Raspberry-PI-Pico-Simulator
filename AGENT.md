@@ -30,8 +30,11 @@ that's the one rule this project cannot bend on. See
 - Vite + React + TypeScript (app shell, canvas UI)
 - Vitest (engine unit tests in plain Node; canvas UI tests under jsdom)
 - Pyodide, loaded inside a **Web Worker** (Python execution — must not
-  block the UI thread)
-- No backend. Everything runs in the user's browser.
+  block the UI thread). The worker **owns the live `Circuit`**; the UI
+  renders from snapshot messages and relays wire/button/pin edits over
+  postMessage. See `docs/ARCHITECTURE.md` → "Python execution model".
+- Optional real-Pyodide verification in Node: `npm run verify:python`
+  (skipped by default — see README "Tests & checks").
 
 ## Target hardware & simulation approach
 
@@ -65,7 +68,17 @@ that's the one rule this project cannot bend on. See
       `Component.ts`, `Circuit.ts`, `RenderInfo.ts`, plus
       `src/engine/components/{PicoBoard,LED,Button}.ts` and an index barrel
 - [x] Vitest tests: engine suites (13 passing, plain Node) + canvas UI
-      suite under jsdom (5 passing, `src/ui/__tests__/CircuitCanvas.test.tsx`)
+      suite under jsdom (12 passing, `src/ui/__tests__/CircuitCanvas.test.tsx`)
+      + worker-message suite (6 passing,
+      `src/execution/__tests__/CircuitHost.test.ts`) + App-level suite
+      (4 passing, `src/App.test.tsx`) — 35 total.
+      `Pyodide.integration.test.ts` exists but skips by default
+      (real-Pyodide end-to-end; run with `npm run verify:python`).
+      `src/test/setup.ts` patches jsdom's missing `crypto.randomUUID`
+      (the engine's `newId()`), registered via `test.setupFiles`.
+      Current totals after the delete + conflict milestones: **60
+      passing + 1 skipped** (10 engine / 4 analog / 3 button / 11
+      CircuitHost / 23 canvas / 9 App).
 - [x] Analog value channel on `Pin` (`analogValue: number | null`, 0–1
       duty for OUT pins) + analog propagation step in `Circuit.tick()`,
       independent of the digital channel; covered by
@@ -73,26 +86,101 @@ that's the one rule this project cannot bend on. See
       **Note:** `machine.PWM` shim and LED brightness are still
       separate, un-started work — committing to the channel does
       not do either of those.
-- [x] Canvas rendering (first layer) — SVG in `src/ui/`       \
+- [x] Canvas rendering — SVG in `src/ui/`
       (`CircuitCanvas.tsx` + `components/{LedView,PicoBoardView,
       ButtonView}.tsx`). Three explicit SVG layers, painted
       bodies → wires → pins (so wires always sit on top of component
       bodies and pins stay visible/clickable on top of everything).
-      Components drawn from `getRenderInfo()` via exhaustive render
-      dispatch; click-to-wire pin connections (first click = pending
-      source, second click on a different pin = connect, same pin twice
-      = cancel); wires are clickable with a wide transparent hit-area +
-      hover highlight, and clicking a wire calls
-      `circuit.disconnect(id)` + `resolveNets()`; ~60fps simulation
-      loop driving `circuit.tick(1/60)`. Canvas positions, the pending
-      wire, and hovered wire are the only UI-owned state —
-      wires/components/pins/values always read from the engine each
-      render. Verified by jsdom UI tests.
-- [ ] Pyodide + `machine` shim — not started
-- [ ] Validation / error states (e.g. short-circuit detection) — not
-      started; known gap flagged in code comments (see `tick()` in
-      `src/engine/Circuit.ts` — conflicting drivers on a net currently
-      silently resolve to FLOATING instead of raising a conflict state)
+      Since the execution milestone this is a **snapshot renderer +
+      relay**: it draws components from worker `snapshot` messages via
+      exhaustive render dispatch and emits `onConnect`/`onDisconnect`/
+      `onPress`/`onRelease` callbacks — it owns no engine objects and
+      never talks to the worker (the parent `App` relays). Click-to-wire
+      pin connections (first click = pending source, second click on a
+      different pin = connect, same pin twice = cancel); wires are
+      clickable with a wide transparent hit-area + hover highlight, and
+      clicking a wire triggers a `disconnect` relay. Verified by jsdom
+      UI tests. The ~60fps `circuit.tick(1/60)` loop lives **inside the
+      worker** now (see execution bullet below).
+- [x] Code execution: Pyodide in a Web Worker with a `machine.Pin`
+      shim. The worker owns the live `Circuit` (`CircuitHost` in
+      `src/execution/worker-core.ts`, no Worker/Pyodide APIs — unit
+      tested in plain Node); the UI (`src/App.tsx`) keeps only a
+      topology record + the latest `snapshot` message. The worker is a
+      **module worker** that imports Pyodide's JS runtime from its
+      **npm package** (`pyodide` v0.314) and fetches only the static
+      WebAssembly/stdlib assets from the jsDelivr CDN
+      (`v314.0.6/full`) via the loader's `indexURL`. It installs
+      `src/execution/machine-shim.py` as the importable `machine`
+      module (Pin only; `time.sleep` is JSPI non-blocking where
+      available, busy-wait fallback), and posts
+      `{type:"snapshot"}` ~60fps — so the canvas reacts even while a
+      Python loop holds the worker. The bridge lives on `globalThis`
+      (`from js import __pico_bridge`) — setting it only via
+      `pyodide.globals` breaks the import (verified by
+      `npm run verify:python`). **Stop is non-cooperative**:
+      `worker.terminate()` unconditionally, then a fresh worker is
+      spawned and the recorded topology is replayed so wiring never
+      disappears. Worker failures are never silent: `worker.onerror`/`
+      onmessageerror` and the worker's own error/unhandledrejection
+      listeners route to the output + a red banner, and a 5s
+      first-snapshot watchdog reports "Worker did not respond".
+      Verified: engine tests unaffected (13), 35 unit + integration
+      tests total, typecheck + build clean, real-Pyodide script drives
+      a wired LED on/off, and `scripts/browser-verify.mjs` runs the
+      full flow (canvas renders, Run blinks LED2, Stop recovers from
+      `while True`, palette drop/wire/drag/Stop-survival) against dev
+      AND production build in headless Edge.
+      Known limits: `machine.PWM`/`ADC`/`I2C`, pause/step debugging,
+      and wakeable/precise sleeps are not implemented. The JSPI
+      non-blocking `time.sleep` (responsive sim mid-sleep) works in
+      Chrome/Edge; **Firefox has no JSPI, so it busy-waits** (script
+      pauses the worker for the sleep duration). See DECISIONS.
+- [x] Component palette + drag interaction
+      (`src/ui/ComponentPalette.tsx`, `src/App.tsx`,
+      `src/App.test.tsx`): the palette offers LED and Button (no second
+      board — PicoBoard stays a singleton) as HTML5 drag sources; dropping
+      on the canvas converts screen→SVG coords
+      (`getScreenCTM().inverse()`, with a client-coords fallback for
+      jsdom) and appends the component to the topology record under a
+      fresh `placed-N` id, posting the same `addComponent` message the
+      init/replay path uses — the worker treats it identically whenever
+      it arrives. Positions are **UI-only** React state
+      (`Record<componentId, {x,y}>`), never sent to the worker, so they
+      survive Stop/respawn untouched. Existing component bodies drag to
+      move via pointer events past a 4px threshold (below which button
+      presses / pin clicks work untouched); wires re-render from the
+      moved positions automatically since wire geometry is derived from
+      positions + snapshot. Verified: 3 new canvas jsdom tests (drop
+      placement + kind, ignore non-palette drops, drag-threshold + move
+      + commit, wires following repositions) and 4 new App-level jsdom
+      tests (palette contents, drop→worker message, pin-click wiring,
+      Stop replay survival of placed parts) with a FakeWorker protocol
+      stub; plus a palette step (drop → wire → drag → Stop) in
+      `scripts/browser-verify.mjs` against dev AND the production build.
+- [x] Deleting placed components (and their wires): engine
+      `Circuit.removeComponent` cascade + `removeComponent` worker
+      message (PicoBoard removal refused → error post; wireId→engineWireId
+      map pruned), canvas selection (plain click, `#ffd500` highlight) +
+      Delete button + Delete/Backspace with a text-field focus guard,
+      and topology/position cleanup in `App` so a deleted part never
+      reappears after Stop. Verified by engine/CircuitHost/canvas/App
+      tests + a browser-verify step (button delete, key delete,
+      editor-focus guard, board undeletable, no reappear after Stop).
+- [x] Conflict / short-circuit detection (validation-states, this
+      scope): `Pin.hasConflict` is a diagnostic-only flag set by
+      `Circuit.propagate()` on every pin of a net with more than one
+      driver (`digital > 1 || analog > 1`, stamped in both passes); the
+      snapshot now carries `conflictedPinIds` (pin uuids) and per-
+      component `pins: [{ id, label }]` so the canvas can map uuid →
+      topology wire endpoints; conflicted wires render red + dashed with
+      a `⚠ N wire conflicts` banner (warning, not prevention — see
+      DECISIONS). Net resolution itself is unchanged (still
+      `FLOATING`/`null`). Verified by engine + CircuitHost + canvas
+      tests and a browser-verify step (wire board OUT pin to button
+      signal → red dashed wire + banner; disconnect → cleared).
+- [ ] Validation / error states beyond conflict detection (undeclared
+      pins, unmapped Python pin numbers, etc.) — not started.
 - [ ] Component library beyond LED — not started (intentionally; see
       "Don't pre-build" rule in `docs/ROADMAP.md`)
 

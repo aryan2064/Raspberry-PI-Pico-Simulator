@@ -13,3 +13,15 @@ if (
     configurable: true,
   });
 }
+
+// jsdom has no PointerEvent, but the renderer's drag-to-move uses pointer
+// events (so touch and mouse share one code path in real browsers). Let the
+// testing-library fireEvent.pointerDown/Move/Up helpers fall back to
+// jsdom's MouseEvent, which does understand clientX/clientY.
+if (
+  typeof window !== "undefined" &&
+  typeof (window as { PointerEvent?: unknown }).PointerEvent === "undefined" &&
+  typeof window.MouseEvent === "function"
+) {
+  (window as { PointerEvent?: typeof MouseEvent }).PointerEvent = window.MouseEvent;
+}

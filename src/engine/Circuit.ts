@@ -25,6 +25,18 @@ class Circuit {
     this.wires = this.wires.filter((w) => w.id !== wireId);
   }
 
+  // Removes the component with the given id, together with every wire that
+  // touches any of its pins (the other end of each such wire simply stops
+  // being connected to the removed component's pin). Like connect() and
+  // disconnect(), this does not call resolveNets() — the caller does that
+  // after the edit.
+  removeComponent(componentId: string): void {
+    this.components = this.components.filter((c) => c.id !== componentId);
+    this.wires = this.wires.filter(
+      (w) => w.a.owner.id !== componentId && w.b.owner.id !== componentId
+    );
+  }
+
   // Groups all pins into nets using union-find over the wire list.
   // Call this whenever wiring changes — not every tick, only on edit.
   resolveNets(): void {
@@ -91,7 +103,12 @@ class Circuit {
         resolvedValue = "FLOATING";
       }
 
+      const conflict =
+        drivers.length > 1 ||
+        pins.filter((p) => p.mode === "OUT" && p.analogValue !== null).length > 1;
+
       for (const p of pins) {
+        p.hasConflict = conflict;
         if (p.mode === "IN") {
           p.value = resolvedValue;
         }
@@ -115,7 +132,15 @@ class Circuit {
         resolvedAnalog = null;
       }
 
+      // Both channels count towards the conflict flag in both passes, so a
+      // digital-only conflict is never cleared by the analog pass (or vice
+      // versa) — the flag reflects the net, not the channel.
+      const conflict =
+        analogDrivers.length > 1 ||
+        pins.filter((p) => p.mode === "OUT").length > 1;
+
       for (const p of pins) {
+        p.hasConflict = conflict;
         if (p.mode === "IN") {
           p.analogValue = resolvedAnalog;
         }

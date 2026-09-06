@@ -12,6 +12,11 @@ export class Pin {
   value: PinValue = "FLOATING";
   analogValue: number | null = null; // separate analog channel, independent of value
   netId: string | null = null; // filled in by Circuit.resolveNets()
+  // Set by Circuit.propagate(): true when this pin's net has more than one
+  // driver (two outputs fighting over one connection). Purely diagnostic —
+  // the resolved value/analogValue still fall back to FLOATING/null on
+  // conflict; this flag is what the UI warns about.
+  hasConflict = false;
 
   constructor(id: string, label: string, owner: Component) {
     this.id = id;

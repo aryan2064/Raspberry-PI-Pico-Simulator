@@ -1,4 +1,3 @@
-import type { Button } from "../../engine";
 import type { PinOffsetMap, Vec } from "../types";
 
 const BTN_W = 48;
@@ -11,19 +10,24 @@ export const buttonPinOffsets: PinOffsetMap = {
 };
 
 interface ButtonViewProps {
-  component: Button;
   renderInfo: { type: "button"; isPressed: boolean };
   position: Vec;
+  // UI-only selection highlight, driven by CircuitCanvas's selected state.
+  selected?: boolean;
+  // Press/release are relayed to the worker (the engine Button lives there),
+  // not called on a local engine object.
+  onPress: () => void;
+  onRelease: () => void;
 }
 
-// Note: this view is the documented exception to pure-presentational views —
-// the interaction with the engine's Button (press()/release()) lives here, on
-// the button's own mouse events, per the canvas milestone spec. Pin markers
-// are drawn by CircuitCanvas in a dedicated layer above wires.
-export function ButtonView({ component, renderInfo, position }: ButtonViewProps) {
+export function ButtonView({ renderInfo, position, selected, onPress, onRelease }: ButtonViewProps) {
   const { isPressed } = renderInfo;
   return (
-    <g transform={`translate(${position.x} ${position.y})`} data-testid="button">
+    <g
+      transform={`translate(${position.x} ${position.y})`}
+      data-testid="button"
+      data-selected={selected ? "true" : "false"}
+    >
       <rect
         x={0}
         y={PIN_R + 8}
@@ -31,11 +35,11 @@ export function ButtonView({ component, renderInfo, position }: ButtonViewProps)
         height={BTN_H - PIN_R - 8}
         rx={6}
         fill={isPressed ? "#2f7d32" : "#4caf50"}
-        stroke="#1b5e20"
-        strokeWidth={2}
-        onMouseDown={() => component.press()}
-        onMouseUp={() => component.release()}
-        onMouseLeave={() => component.release()}
+        stroke={selected ? "#ffd500" : "#1b5e20"}
+        strokeWidth={selected ? 4 : 2}
+        onMouseDown={onPress}
+        onMouseUp={onRelease}
+        onMouseLeave={onRelease}
         style={{ cursor: "pointer", userSelect: "none" }}
         data-testid="button-body"
         data-pressed={isPressed ? "true" : "false"}

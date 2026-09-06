@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { Button, Component, Pin, Circuit, RenderInfo } from "../engine";
+import type { RenderInfo } from "../engine";
+import type { ComponentKind, PinRef, SnapshotMessage, TopologyConnection } from "../execution/messages";
 import type { PinMarkerStyle, PinOffsetMap, Vec } from "./types";
+import { COMPONENT_MIME } from "./ComponentPalette";
 import { ButtonView, buttonPinOffsets } from "./components/ButtonView";
 import { LedView, ledPinOffsets } from "./components/LedView";
 import { PicoBoardView, picoPinOffsets } from "./components/PicoBoardView";
@@ -14,7 +16,6 @@ const PIN_OFFSETS: Record<RenderInfo["type"], PinOffsetMap> = {
   pico_board: picoPinOffsets,
 };
 
-// Pin marker appearance per component type (drawn centrally in the pins layer).
 const PIN_STYLE: Record<RenderInfo["type"], PinMarkerStyle> = {
   led: { r: 5, fill: "#888", stroke: "#555" },
   button: { r: 5, fill: "#888", stroke: "#555" },
@@ -23,134 +24,433 @@ const PIN_STYLE: Record<RenderInfo["type"], PinMarkerStyle> = {
 
 const WIRE_COLOR = "#1f8aff";
 const WIRE_HOVER_COLOR = "#0056b3";
-const WIRE_HIT_WIDTH = 14; // generously wide invisible line for easier clicking
+// A wire whose net has two (or more) drivers is a live short-circuit; it must
+// read as a warning, not a normal connection. Kept visibly distinct so the
+// user sees the problem without needing to know the engine internals.
+const WIRE_CONFLICT_COLOR = "#d81b1b";
+const WIRE_CONFLICT_HOVER_COLOR = "#a40000";
+const WIRE_HIT_WIDTH = 14;
 
-// Simple fixed grid layout — drag-to-move is a follow-up, per the canvas spec.
-function initialPositions(components: Component[]): Record<string, Vec> {
-  const positions: Record<string, Vec> = {};
-  components.forEach((c, i) => {
-    const col = i % 3;
-    const row = Math.floor(i / 3);
-    positions[c.id] = { x: 40 + col * 360, y: 40 + row * 200 };
-  });
-  return positions;
+// A pointer-down only becomes a drag once it travels beyond this many screen
+// pixels, so a plain click (e.g. pressing the button) doesn't nudge anything.
+const DRAG_THRESHOLD = 4;
+
+// Converts a drop's client/screen coordinates into the SVG's own coordinate
+// space so a placed component lands where the user dropped it even when the
+// SVG is scaled/offset within the page. getScreenCTM() is the standard
+// inverse-transform approach; the fallback keeps the renderer robust in
+// environments with no usable screen transform (e.g. jsdom tests).
+function screenToSvgPoint(
+  svg: SVGSVGElement | null,
+  clientX: number,
+  clientY: number
+): Vec {
+  if (svg && typeof svg.getScreenCTM === "function") {
+    try {
+      const ctm = svg.getScreenCTM();
+      if (ctm) {
+        const point = svg.createSVGPoint();
+        point.x = clientX;
+        point.y = clientY;
+        const mapped = point.matrixTransform(ctm.inverse());
+        if (Number.isFinite(mapped.x) && Number.isFinite(mapped.y)) {
+          return { x: mapped.x, y: mapped.y };
+        }
+      }
+    } catch {
+      // degenerate/singular matrix — fall through to the pass-through below
+    }
+  }
+  return { x: clientX, y: clientY };
 }
 
-// Screen position of a pin = its owning component's current canvas position
-// + the pin's offset for that component type. Recomputed each render.
-function pinScreenPos(pin: Pin, positions: Record<string, Vec>): Vec {
-  const origin = positions[pin.owner.id] ?? { x: 0, y: 0 };
-  const off = PIN_OFFSETS[pin.owner.getRenderInfo().type][pin.label] ?? { x: 0, y: 0 };
+// Screen position of a pin = its owning component's canvas position + the
+// pin's offset for that component type. This canvas renders from snapshots
+// (no engine objects), so pin positions come from the id-keyed positions map.
+function pinScreenPos(
+  componentId: string,
+  pinLabel: string,
+  kind: RenderInfo["type"],
+  positions: Record<string, Vec>
+): Vec {
+  const origin = positions[componentId] ?? { x: 0, y: 0 };
+  const off = PIN_OFFSETS[kind][pinLabel] ?? { x: 0, y: 0 };
   return { x: origin.x + off.x, y: origin.y + off.y };
 }
 
-// Dispatches on the discriminated RenderInfo union. The `default` branch is
-// unreachable today; if a new component type is added without a case here,
-// TypeScript makes the assignment to `never` a compile error. Views render
-// bodies only — pin markers live in their own layer (see render() below).
-function renderComponentView(component: Component, position: Vec): ReactNode {
-  const info = component.getRenderInfo();
-  switch (info.type) {
+function renderComponentView(
+  componentId: string,
+  renderInfo: RenderInfo,
+  position: Vec,
+  onPress: (componentId: string) => void,
+  onRelease: (componentId: string) => void,
+  selected: boolean
+): ReactNode {
+  switch (renderInfo.type) {
     case "led":
-      return <LedView key={component.id} renderInfo={info} position={position} />;
+      return (
+        <LedView key={componentId} renderInfo={renderInfo} position={position} selected={selected} />
+      );
     case "button":
       return (
         <ButtonView
-          key={component.id}
-          component={component as Button}
-          renderInfo={info}
+          key={componentId}
+          renderInfo={renderInfo}
           position={position}
+          selected={selected}
+          onPress={() => onPress(componentId)}
+          onRelease={() => onRelease(componentId)}
         />
       );
     case "pico_board":
-      return <PicoBoardView key={component.id} renderInfo={info} position={position} />;
+      return (
+        <PicoBoardView
+          key={componentId}
+          renderInfo={renderInfo}
+          position={position}
+          selected={selected}
+        />
+      );
     default: {
-      const exhaustive: never = info;
+      const exhaustive: never = renderInfo;
       return exhaustive;
     }
   }
 }
 
 interface CircuitCanvasProps {
-  circuit: Circuit;
+  // The latest worker snapshot — the ONLY source of what gets drawn.
+  snapshot: SnapshotMessage;
+  // Main-thread topology record: what's wired to what. Wire segments are
+  // drawn from this; endpoint positions come from PIN_OFFSETS.
+  connections: TopologyConnection[];
+  // Main-thread (UI-only) position per component — the worker/engine has no
+  // concept of position, so the canvas never derives these from snapshots.
+  positions: Record<string, Vec>;
+  onConnect: (from: PinRef, to: PinRef) => void;
+  onDisconnect: (wireId: string) => void;
+  onPress: (componentId: string) => void;
+  onRelease: (componentId: string) => void;
+  onMoveComponent: (componentId: string, position: Vec) => void;
+  onPlaceComponent: (position: Vec, kind: ComponentKind) => void;
+  // Called when the user deletes a selected component. The canvas only tracks
+  // which component is selected; the actual removal (worker message + topology
+  // record + positions) belongs to the parent.
+  onDeleteComponent: (componentId: string) => void;
 }
 
-export function CircuitCanvas({ circuit }: CircuitCanvasProps) {
-  // UI-only state: canvas positions, the pending wire's source pin, and the
-  // hovered wire. Everything else (components, pins, wires, values) is read
-  // from the engine each render — never duplicated here as a source of truth.
-  const [positions] = useState<Record<string, Vec>>(() =>
-    initialPositions(circuit.components)
-  );
-  const [pendingPin, setPendingPin] = useState<Pin | null>(null);
+export function CircuitCanvas({
+  snapshot,
+  connections,
+  positions,
+  onConnect,
+  onDisconnect,
+  onPress,
+  onRelease,
+  onMoveComponent,
+  onPlaceComponent,
+  onDeleteComponent,
+}: CircuitCanvasProps) {
+  // UI-only state: the pending wire source, the hovered wire, whether the
+  // user is dragging a palette item over the canvas, and which (if any)
+  // component is selected for deletion. Everything else comes from the
+  // snapshot / topology / positions props — this canvas owns no engine
+  // objects and never talks to the worker itself.
+  const [pendingPin, setPendingPin] = useState<PinRef | null>(null);
   const [hoveredWireId, setHoveredWireId] = useState<string | null>(null);
-  const [, setFrame] = useState(0);
+  const [draggingOver, setDraggingOver] = useState(false);
+  const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
 
-  // ~60fps simulation loop: tick the engine, force a re-render so
-  // getRenderInfo() is re-read every frame.
-  useEffect(() => {
-    const id = setInterval(() => {
-      circuit.tick(1 / 60);
-      setFrame((f) => f + 1);
-    }, 1000 / 60);
-    return () => clearInterval(id);
-  }, [circuit]);
+  // The selected id, mirrored into a ref so the window keydown listener (which
+  // is attached once) always sees the latest selection.
+  const selectedIdRef = useRef<string | null>(null);
+  function updateSelection(id: string | null) {
+    selectedIdRef.current = id;
+    setSelectedComponentId(id);
+  }
 
-  function handlePinClick(pin: Pin) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+
+  // In-progress body drag. Pointer-down records a candidate; nothing moves
+  // until the pointer travels past DRAG_THRESHOLD, so button presses and pin
+  // clicks keep working untouched.
+  const dragRef = useRef<{
+    componentId: string;
+    startClient: Vec;
+    startPosition: Vec;
+    moved: boolean;
+  } | null>(null);
+
+  const infoByComponent = useMemo(
+    () => new Map(snapshot.components.map((c) => [c.id, c.renderInfo])),
+    [snapshot.components]
+  );
+
+  // Snapshot pins carry the engine's uuid for each pin; the wire topology only
+  // knows `componentId:pinLabel`. This map bridges the two so a conflicted pin
+  // id can be matched back to the wires that touch it.
+  const pinIdByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of snapshot.components) {
+      for (const p of c.pins) {
+        map.set(`${c.id}:${p.label}`, p.id);
+      }
+    }
+    return map;
+  }, [snapshot.components]);
+
+  const conflictedPinIds = useMemo(
+    () => new Set(snapshot.conflictedPinIds),
+    [snapshot.conflictedPinIds]
+  );
+
+  // Number of connections touching at least one conflicted pin. Two fighting
+  // pins are one conflicted net, but may span several visible wires (a net is
+  // everything transitively connected); the banner counts connections because
+  // that is what the user sees as wires.
+  const conflictedWireCount = useMemo(() => {
+    let count = 0;
+    for (const conn of connections) {
+      const aId = pinIdByKey.get(`${conn.from.componentId}:${conn.from.pinLabel}`);
+      const bId = pinIdByKey.get(`${conn.to.componentId}:${conn.to.pinLabel}`);
+      if (
+        (aId !== undefined && conflictedPinIds.has(aId)) ||
+        (bId !== undefined && conflictedPinIds.has(bId))
+      ) {
+        count++;
+      }
+    }
+    return count;
+  }, [connections, pinIdByKey, conflictedPinIds]);
+
+  function handlePinClick(ref: PinRef) {
     if (pendingPin === null) {
-      setPendingPin(pin);
+      setPendingPin(ref);
       return;
     }
-    if (pendingPin.id === pin.id) {
+    if (pendingPin.componentId === ref.componentId && pendingPin.pinLabel === ref.pinLabel) {
       // Same pin clicked twice cancels instead of connecting to itself.
       setPendingPin(null);
       return;
     }
-    circuit.connect(pendingPin, pin);
-    circuit.resolveNets();
+    onConnect(pendingPin, ref);
     setPendingPin(null);
   }
 
   function handleWireClick(wireId: string) {
-    circuit.disconnect(wireId);
-    circuit.resolveNets();
+    onDisconnect(wireId);
     setHoveredWireId(null);
-    setFrame((f) => f + 1);
   }
 
-  const pendingPinId = pendingPin?.id ?? null;
+  // ---- body drag-to-move (pointer events; pin circles are in another layer
+  //      and never trigger this) ----
+
+  function handleBodyPointerDown(e: React.PointerEvent, componentId: string) {
+    if (e.button !== 0) return; // primary button only
+    dragRef.current = {
+      componentId,
+      startClient: { x: e.clientX, y: e.clientY },
+      startPosition: positions[componentId] ?? { x: 0, y: 0 },
+      moved: false,
+    };
+  }
+
+  function handleSvgPointerMove(e: React.PointerEvent) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dx = e.clientX - drag.startClient.x;
+    const dy = e.clientY - drag.startClient.y;
+    if (!drag.moved) {
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      drag.moved = true;
+      // Committing to a drag cancels any button press that started on this
+      // pointer-down, so a button never ends up visually stuck pressed while
+      // being dragged around.
+      if (infoByComponent.get(drag.componentId)?.type === "button") {
+        onRelease(drag.componentId);
+      }
+      // Capture the pointer so moves outside the SVG still track.
+      if (typeof e.currentTarget.setPointerCapture === "function") {
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore — e.g. jsdom / synthetic events / already-released pointer
+        }
+      }
+    }
+    onMoveComponent(drag.componentId, {
+      x: drag.startPosition.x + dx,
+      y: drag.startPosition.y + dy,
+    });
+  }
+
+  function handleSvgPointerUp(e: React.PointerEvent) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    if (drag.moved) {
+      // Commit exactly where the pointer landed (in case no move event existed
+      // for the final lift).
+      onMoveComponent(drag.componentId, {
+        x: drag.startPosition.x + (e.clientX - drag.startClient.x),
+        y: drag.startPosition.y + (e.clientY - drag.startClient.y),
+      });
+      if (typeof e.currentTarget.releasePointerCapture === "function") {
+        try {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+      }
+    } else {
+      // A plain click (no drag threshold crossed) selects the component body.
+      // Pin clicks live in another layer and never set dragRef, so they don't
+      // change the selection here.
+      updateSelection(drag.componentId);
+    }
+  }
+
+  function handleSvgPointerCancel() {
+    dragRef.current = null;
+  }
+
+  // ---- drop (native HTML5 drag-and-drop from the palette) ----
+
+  function handleDrop(e: React.DragEvent<SVGSVGElement>) {
+    e.preventDefault();
+    setDraggingOver(false);
+    const kind = e.dataTransfer?.getData(COMPONENT_MIME) as ComponentKind | "";
+    if (kind !== "led" && kind !== "button") return; // not a palette drop
+    onPlaceComponent(screenToSvgPoint(svgRef.current, e.clientX, e.clientY), kind);
+  }
+
+  // The single shared delete trigger used by both the visible Delete button
+  // and the Delete/Backspace key. Does nothing when nothing is selected or the
+  // selection is the PicoBoard (which is exempt from removal).
+  function handleDeleteSelected() {
+    const id = selectedIdRef.current;
+    if (id === null) return;
+    if (infoByComponent.get(id)?.type === "pico_board") return;
+    // Drop any in-progress wire sourced from a pin of the deleted component.
+    if (pendingPin && pendingPin.componentId === id) {
+      setPendingPin(null);
+    }
+    onDeleteComponent(id);
+    updateSelection(null);
+  }
+
+  // Latest snapshot's component type per id, so the Delete affordances know
+  // whether the current selection is the (undeletable) board.
+  const canDeleteSelected =
+    selectedComponentId !== null &&
+    infoByComponent.get(selectedComponentId) !== undefined &&
+    infoByComponent.get(selectedComponentId)!.type !== "pico_board";
+
+  // Keep a ref to handleDeleteSelected so the once-attached window listener
+  // below always calls the latest closure (fresh props/state per render).
+  const deleteSelectedRef = useRef<() => void>(() => {});
+  deleteSelectedRef.current = handleDeleteSelected;
+
+  useEffect(() => {
+    // Delete/Backspace on the body (i.e. no canvas selection interactions in
+    // focus) removes the selected component. Typing the same keys inside a
+    // text field — the code editor, for example — must keep working untouched.
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const el = document.activeElement;
+      if (
+        el instanceof HTMLElement &&
+        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      deleteSelectedRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const pendingPinId = pendingPin ? `${pendingPin.componentId}:${pendingPin.pinLabel}` : null;
 
   return (
-    <svg
-      width="100%"
-      height="720"
-      viewBox="0 0 1200 700"
-      style={{ background: "#f7f7f9", border: "1px solid #d0d0d4" }}
-    >
-      {/* LAYER 1 — component bodies. Drawn first; wires go on top. */}
+    <div style={{ position: "relative" }}>
+      <svg
+        ref={svgRef}
+        width="100%"
+        height="720"
+        viewBox="0 0 1200 700"
+        data-testid="circuit-canvas"
+        style={{
+          background: "#f7f7f9",
+          border: draggingOver ? "2px dashed #1f8aff" : "1px solid #d0d0d4",
+          borderRadius: 4,
+          display: "block",
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDraggingOver(true);
+        }}
+        onDragEnter={() => setDraggingOver(true)}
+        onDragLeave={() => setDraggingOver(false)}
+        onDrop={handleDrop}
+        onClick={(e) => {
+          // A click landing on the bare canvas (not on a body/pin/wire, whose
+          // click targets are their own elements) clears the selection.
+          if (e.target === svgRef.current) updateSelection(null);
+        }}
+        onPointerMove={handleSvgPointerMove}
+        onPointerUp={handleSvgPointerUp}
+        onPointerCancel={handleSvgPointerCancel}
+      >
+      {/* LAYER 1 — component bodies. Drawn first; wires go on top. The
+          wrapper <g> carries the drag-to-move handlers (body-only: pin
+          circles live in layer 3). */}
       <g data-layer="bodies">
-        {circuit.components.map((c) =>
-          renderComponentView(c, positions[c.id] ?? { x: 0, y: 0 })
-        )}
+        {snapshot.components.map((c) => (
+          <g
+            key={c.id}
+            data-testid={`body-${c.id}`}
+            onPointerDown={(e) => handleBodyPointerDown(e, c.id)}
+            style={{ cursor: "move" }}
+          >
+            {renderComponentView(
+              c.id,
+              c.renderInfo,
+              positions[c.id] ?? { x: 0, y: 0 },
+              onPress,
+              onRelease,
+              selectedComponentId === c.id
+            )}
+          </g>
+        ))}
       </g>
 
-      {/* LAYER 2 — wires. Above every body so a wire is never hidden behind a
-          component; below pin markers so pins stay clickable. Clicking a wire
-          removes it. */}
+      {/* LAYER 2 — wires. Above every body, below pin markers. */}
       <g data-layer="wires">
-        {circuit.wires.map((w) => {
-          const a = pinScreenPos(w.a, positions);
-          const b = pinScreenPos(w.b, positions);
-          const hovered = hoveredWireId === w.id;
+        {connections.map((conn) => {
+          const kindA = infoByComponent.get(conn.from.componentId)?.type;
+          const kindB = infoByComponent.get(conn.to.componentId)?.type;
+          if (!kindA || !kindB) return null;
+          const a = pinScreenPos(conn.from.componentId, conn.from.pinLabel, kindA, positions);
+          const b = pinScreenPos(conn.to.componentId, conn.to.pinLabel, kindB, positions);
+          const hovered = hoveredWireId === conn.wireId;
+          const aId = pinIdByKey.get(`${conn.from.componentId}:${conn.from.pinLabel}`);
+          const bId = pinIdByKey.get(`${conn.to.componentId}:${conn.to.pinLabel}`);
+          const conflicted =
+            (aId !== undefined && conflictedPinIds.has(aId)) ||
+            (bId !== undefined && conflictedPinIds.has(bId));
           return (
             <g
-              key={w.id}
-              onClick={() => handleWireClick(w.id)}
-              onMouseEnter={() => setHoveredWireId(w.id)}
+              key={conn.wireId}
+              onClick={() => handleWireClick(conn.wireId)}
+              onMouseEnter={() => setHoveredWireId(conn.wireId)}
               onMouseLeave={() => setHoveredWireId(null)}
               style={{ cursor: "pointer" }}
-              data-testid={`wire-${w.id}`}
+              data-testid={`wire-${conn.wireId}`}
+              data-conflicted={conflicted ? "true" : undefined}
             >
+              {/* generous invisible hit area — a 1px target is too small */}
               <line
                 x1={a.x}
                 y1={a.y}
@@ -164,8 +464,17 @@ export function CircuitCanvas({ circuit }: CircuitCanvasProps) {
                 y1={a.y}
                 x2={b.x}
                 y2={b.y}
-                stroke={hovered ? WIRE_HOVER_COLOR : WIRE_COLOR}
+                stroke={
+                  conflicted
+                    ? hovered
+                      ? WIRE_CONFLICT_HOVER_COLOR
+                      : WIRE_CONFLICT_COLOR
+                    : hovered
+                      ? WIRE_HOVER_COLOR
+                      : WIRE_COLOR
+                }
                 strokeWidth={2}
+                strokeDasharray={conflicted ? "8 5" : undefined}
                 pointerEvents="none"
               />
               <title>Click to remove wire</title>
@@ -174,33 +483,77 @@ export function CircuitCanvas({ circuit }: CircuitCanvasProps) {
         })}
       </g>
 
-      {/* LAYER 3 — pin markers. On top of everything so they stay visible and
-          clickable. */}
+      {/* LAYER 3 — pin markers. On top of everything. Pin labels come from the
+          offset maps (pin objects live in the worker, never here). */}
       <g data-layer="pins">
-        {circuit.components.flatMap((c) => {
-          const style = PIN_STYLE[c.getRenderInfo().type];
-          return c.pins.map((pin) => {
-            const pos = pinScreenPos(pin, positions);
+        {snapshot.components.flatMap((c) => {
+          const offsets = PIN_OFFSETS[c.renderInfo.type];
+          const style = PIN_STYLE[c.renderInfo.type];
+          return Object.keys(offsets).map((label) => {
+            const pos = pinScreenPos(c.id, label, c.renderInfo.type, positions);
+            const isPending = pendingPinId === `${c.id}:${label}`;
             return (
               <g
-                key={pin.id}
+                key={`${c.id}:${label}`}
                 transform={`translate(${pos.x} ${pos.y})`}
-                onClick={() => handlePinClick(pin)}
+                onClick={() => handlePinClick({ componentId: c.id, pinLabel: label })}
                 style={{ cursor: "pointer" }}
-                data-testid={`pin-${pin.id}`}
+                data-testid={`pin-${c.id}-${label}`}
               >
                 <circle
                   r={style.r}
-                  fill={pendingPinId === pin.id ? "#ffd500" : style.fill}
+                  fill={isPending ? "#ffd500" : style.fill}
                   stroke={style.stroke}
                   strokeWidth={1}
                 />
-                <title>{`${pin.label} (${pin.value})`}</title>
+                <title>{label}</title>
               </g>
             );
           });
         })}
       </g>
-    </svg>
+      </svg>
+      {conflictedWireCount > 0 && (
+        <div
+          role="status"
+          data-testid="conflict-banner"
+          style={{
+            marginTop: "0.5rem",
+            padding: "0.4rem 0.75rem",
+            background: "#ffe3e3",
+            color: "#a40000",
+            border: "1px solid #a40000",
+            borderRadius: 4,
+            fontWeight: 600,
+          }}
+        >
+          ⚠{" "}
+          {conflictedWireCount === 1
+            ? "1 wire conflict"
+            : `${conflictedWireCount} wire conflicts`}{" "}
+          — multiple outputs are driving the same connection
+        </div>
+      )}
+      {canDeleteSelected && (
+        <button
+          data-testid="delete-component"
+          onClick={handleDeleteSelected}
+          style={{
+            position: "absolute",
+            top: 12,
+            right: 12,
+            padding: "0.35rem 0.75rem",
+            background: "#ffe3e3",
+            border: "1px solid #a40000",
+            borderRadius: 4,
+            color: "#a40000",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Delete
+        </button>
+      )}
+    </div>
   );
 }

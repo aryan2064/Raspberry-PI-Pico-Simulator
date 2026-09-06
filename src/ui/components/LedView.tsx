@@ -12,21 +12,27 @@ export const ledPinOffsets: PinOffsetMap = {
 interface LedViewProps {
   renderInfo: { type: "led"; isOn: boolean };
   position: Vec;
+  // UI-only selection highlight, driven by CircuitCanvas's selected state.
+  selected?: boolean;
 }
 
 // Purely presentational: renders the LED body only. Pin markers are drawn by
 // CircuitCanvas in a dedicated layer above wires.
-export function LedView({ renderInfo, position }: LedViewProps) {
+export function LedView({ renderInfo, position, selected }: LedViewProps) {
   const { isOn } = renderInfo;
   return (
-    <g transform={`translate(${position.x} ${position.y})`} data-testid="led">
+    <g
+      transform={`translate(${position.x} ${position.y})`}
+      data-testid="led"
+      data-selected={selected ? "true" : "false"}
+    >
       <circle
         cx={LED_W / 2}
         cy={LED_H / 2}
         r={22}
         fill={isOn ? "#ff3b30" : "#e4e4e6"}
-        stroke={isOn ? "#c22" : "#b8b8bc"}
-        strokeWidth={2}
+        stroke={selected ? "#ffd500" : isOn ? "#c22" : "#b8b8bc"}
+        strokeWidth={selected ? 4 : 2}
         data-testid="led-body"
         data-on={isOn ? "true" : "false"}
       />
