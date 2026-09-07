@@ -15,7 +15,8 @@
 3. **Code execution** — Pyodide in a Web Worker, `machine.Pin` shim
    reading/writing `PicoBoard` pins. ✅ Built & verified (see "Code
    execution" under Current status detail). Limits: Pin-only shim,
-   busy-wait `sleep`, non-cooperative Stop-by-replay. `machine.PWM`,
+   non-cooperative Stop-by-replay; `time.sleep` is non-blocking where
+   JSPI exists else busy-wait; `machine.PWM`,
    `ADC`, `I2C`, pause/step debugging still open.
 4. **Component palette / drag editing** — user-placed parts: drop a
    palette component onto the canvas, drag it around, then wire it like
@@ -113,22 +114,26 @@ before deciding to skip ahead again.
     for this step, `Circuit.disconnect(wireId)` (engine tests: 13
     passing).
   - Demo (`src/App.tsx`): two independent demo nets so the interactive
-    and Python demos never fight —
-    *button → `GPIO15` → LED* (press and hold the green button to light
-    it) and *LED2 anode ↔ `GPIO16`* (driven by the default MicroPython
-    blink script; cathode → GND). An OUT pin may not share a net with
-    the button's `signal` OUT pin, or the engine's multi-driver conflict
-    placeholder resolves the net to `FLOATING`. Board GPIO pins default
-    to `UNSET` mode and only "hear" propagated values once set `IN` by
-    the `machine.Pin` shim — the LED anode works because it's an `IN`
-    listener on its net.
+    and Python demos never fight — *button → `GPIO15` → LED* (press and
+    hold the green button to light it; closing the button ties 3V3 onto
+    the GPIO15 pull-down net) and *LED2 anode ↔ `GPIO16`* (driven by the
+    default MicroPython blink script; cathode → GND). Board GPIO pins
+    default to `UNSET` mode (GPIO15 is configured `IN` + internal
+    pull-down by the demo's `pinSetups` replay) and only "hear"
+    propagated values once set `IN` by the `machine.Pin` shim — the LED
+    anode works because it's an `IN` listener on its net.
 
 - `Button` is the second real component, built for a stated, concrete
-  reason: to exercise the **driver side** of net resolution ahead of
-  canvas work. Its `signal` pin is `OUT`, so it drives nets rather than
-  listening to them — exactly the role a user-interactive input
-  component plays in the upcoming canvas editor. It follows the pattern
-  documented in `docs/COMPONENT_GUIDE.md`.
+  reason: to exercise the **passive-switch** side of net resolution
+  ahead of canvas work. It does **not** drive anything — its four legs
+  (`leg1a`/`leg1b`/`leg2a`/`leg2b`) are `UNSET`;
+  `getInternalConnections()` always adds the two permanent strip pairs
+  and appends the `leg1a`–`leg2a` bridge while pressed, so a press
+  merges the strip nets and a release splits them, with no wire edit
+  involved and no way to manufacture a driver conflict. See
+  `docs/DECISIONS.md` for the
+  pull/fallback semantics that pair with it; the modern-button pattern
+  is what `docs/COMPONENT_GUIDE.md` documents now.
 
 - **Code execution** (Roadmap step 3) — built and verified. Live in
   `src/execution/` + rewired canvas:
@@ -191,8 +196,9 @@ before deciding to skip ahead again.
     topology). Drag payloads use a custom MIME type
     (`application/x-pico-component`).
   - Drop-to-place: `CircuitCanvas` converts the drop's client coords into
-    SVG coords via `getScreenCTM().inverse()` (falling back to client
-    coords when no usable screen transform exists, e.g. jsdom), then
+    stage coords via `clientToStagePoint()` (a `getBoundingClientRect`-based
+    conversion, falling back to client coords when no usable rect exists,
+    e.g. jsdom), then
     `App` records the part in the topology record under a fresh `placed-N`
     id and posts the same `addComponent` message the init/replay path
     uses — worker-side, a palette part is indistinguishable from a demo
@@ -242,12 +248,43 @@ before deciding to skip ahead again.
   the affected connections; the count and wiring stay fully user-driven
   (warning, not prevention — see DECISIONS). Verified by 3 engine tests
   (digital conflict, single driver, two analog drivers), 2 CircuitHost
-  tests (GPIO15-as-OUT wired to the button's OUT signal surfaces both
-  pin ids; disconnect clears them), 3 canvas tests (single-wire banner,
-  plural banner, clear-on-resolve), all green in `npm test` (60 passed +
-  1 skipped), typecheck + build clean, and a new browser-verify step
-  (wire an OUT board pin to the button's output → red dashed wire +
-  banner; disconnect → cleared) against dev and the production build.
+  tests (wiring 3V3 — OUT HIGH — to GPIO15 set OUT surfaces both pin
+  ids as conflicted; disconnect clears them), 3 canvas tests
+  (single-wire banner, plural banner, clear-on-resolve), all green in
+  `npm test` (60 passed + 1 skipped at the time; the demo's browser step
+  now uses a 3V3↔GND short — pressing a button can merge two
+  already-conflicting nets, and the button *itself* can never create one
+  — see `scripts/browser-verify.mjs` step 7), typecheck + build clean.
+
+- **Pin pulls + passive button + Wokwi visuals** — built and verified:
+  `Pin.pull` (`UP`/`DOWN`/`NONE`) is a digital *fallback* for driverless
+  nets, never a driver and never a conflict source; `Button` was
+  reworked from an OUT-signal driver to a passive switch
+  (`getInternalConnections()` toggling the `leg1a`–`leg2a` bridge), so pressing the demo
+  button pulls the LED net HIGH through 3V3 with no wire edit; the
+  `machine.Pin` third argument (`PULL_UP`/`PULL_DOWN`) maps onto
+  `pin.pull`, with both bridge `setupPin` and the app's `setupPin`
+  replay calling the new `Circuit.resolveNow()` so a pull is live the
+  instant it's configured (a busy-waiting script froze the tick loop,
+  so this is required for correctness — caught by `npm run
+  verify:python`). LED and button now render with the MIT `@wokwi/elements`
+  custom elements (`wokwi-led`, `wokwi-pushbutton`) from the published
+  package (a vendoring attempt was reverted as unnecessary — see
+  `docs/DECISIONS.md`), registered via a side-effect
+  `import "@wokwi/elements"` in `main.tsx`; `CircuitCanvas`
+  became a scaled HTML stage (`data-testid="circuit-stage"`, 1200×700,
+  CSS-transform scaled from a ResizeObserver) with component bodies as
+  real DOM underneath SVG wire/pin overlays (`data-layer="wires"|"pins"`,
+  `pointer-events:none` svgs), and all drop/drag math routed through
+  `clientToStagePoint()`. The board stays a hand-drawn SVG (no Wokwi
+  element exists for it). See `docs/DECISIONS.md`; verified by 2
+  engine tests (demo button circuit / pull conflict), 5 CircuitHost
+  tests (setupPin pulls, `setupPin` message, bridge pull forwarding),
+  updated canvas/App tests, `npm run typecheck`, `npm test` (72
+  passed + 1 skipped), `npm run verify:python`, `npm run build`, and
+  the full `node scripts/browser-verify.mjs` run against the dev
+  server (all green, including the new step-7 3V3↔GND conflict and the
+  JSPI press-mid-sleep latency check).
 
 - `README.md` maintained at project root with current status and run
   instructions. Keep it updated as work progresses.
@@ -269,9 +306,12 @@ before deciding to skip ahead again.
   actually requires the richer behavior.
 - **Don't let `engine/` import from `ui/` or `execution/`, ever.** See
   `docs/ARCHITECTURE.md` and `docs/DECISIONS.md`.
-- **Don't recompute `resolveNets()` every tick.** It's only needed
-  when wiring actually changes; `tick()` should assume nets are
-  already current.
+- **Don't assume nets stay current between wiring edits.** `tick()` now
+  calls `resolveNets()` **every** step (not just on wire changes): a
+  passive switch's `getInternalConnections()` can merge/split nets mid-run
+  without any wire edit, so caching net membership would go stale. The
+  probe test for this reversal is the button press that pulls the demo
+  LED on without any message except `press` (`docs/DECISIONS.md`).
 - **Don't build a general circuit solver "just in case."** Analog
   behavior is added per-component, only when that specific component
   needs it.
@@ -311,6 +351,23 @@ before deciding to skip ahead again.
 
 ## Resolved / closed items
 
+- **Button as a passive switch + pin pulls — done.** The button no
+  longer drives an OUT `signal` pin; it permanently shorts each strip
+  (`leg1a`–`leg1b`, `leg2a`–`leg2b`) and bridges them
+  (`leg1a`–`leg2a`) while pressed, all through
+  `getInternalConnections()`. `Pin.pull` added as a
+  driverless-net fallback; `machine.Pin(..., PULL_UP/PULL_DOWN)` and the
+  app's `setupPin` replay both resolve immediately via the new
+  `Circuit.resolveNow()`. See `docs/DECISIONS.md`.
+- **Wokwi visuals for LED/button — done.** The LED and button render
+  with the published MIT `@wokwi/elements` package (a normal npm
+  dependency; a vendoring attempt was reverted as unnecessary — see
+  `docs/DECISIONS.md`) against a scaled HTML-stage `CircuitCanvas` with
+  SVG wire/pin overlays scaled identically, so pin markers sit exactly
+  on each element's `pinInfo` offsets (asserted in browser-verify
+  step 1b) and the demo LED glows from within its shadow DOM. The board
+  stays hand-drawn (no Wokwi element exists). See `docs/DECISIONS.md`
+  and `docs/ARCHITECTURE.md`.
 - **Deleting placed components — done.** `Circuit.removeComponent`
   (boarding-cascade), the `removeComponent` worker message (board
   refused, ghost wireIds pruned), canvas selection + Delete button +

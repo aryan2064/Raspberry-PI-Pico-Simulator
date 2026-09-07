@@ -337,3 +337,104 @@ each component's `pins` (`id` + `label`), so the main thread can resolve
 those uuids back to the `componentId:pinLabel` endpoints the wire
 topology uses. This is foundational work for whatever real visualization
 the validation-states phase eventually wants.
+
+---
+
+**Pin pulls are a fallback, not a driver: `PinPull = "UP" | "DOWN" | "NONE"`**
+
+`Pin.pull` is a digital fallback applied only when a net has **zero OUT
+drivers** (`pins.length > 0 && !drivers.length` → `UP`→HIGH, `DOWN`→LOW,
+`NONE`→FLOATING). A single active driver always wins; UP and DOWN together
+with no driver still resolve FLOATING; and pulls **never create a
+conflict** (multi-driver detection explicitly ignores non-drivers), so a
+cloud of pulled-up listener pins can never flag a short. `connect()` and
+`disconnect()` re-group nets but deliberately do **not** resolve values —
+resolution happens on every `tick()` so a passive switch's press/release
+(toggle of its internal connection) is reflected without any wire edit.
+Critically for the `machine.Pin` bridge, a pin's pull must be *live
+immediately* after setup, not one tick later (a busy-waiting script froze
+the tick loop, so `Pin(17, IN, PULL_UP); pin.value()` would have read the
+stale pre-pull value forever). That's what `Circuit.resolveNow()`
+(`resolveNets()` + `propagate()` only, no `update()`/time advance) is
+for: both `CircuitHost.setupPin` and `setupPinMessage` call it so a pull
+lands the instant it's configured. This was a real bug — the pull
+assertions in the Pyodide integration test only fail under
+`npm run verify:python` (the test is skipped in the normal run), so the
+gap in `CircuitHost.setupPin` shipped unnoticed until that was run.
+
+---
+
+**Button is a passive switch: permanent strip pairs + a dynamic bridge**
+
+The button does not drive or pull anything. Its four pins (`leg1a`,
+`leg1b`, `leg2a`, `leg2b`) are `"UNSET"`-mode;
+`getInternalConnections()` always returns the two mechanical strip
+pairs (`[leg1a,leg1b]`, `[leg2a,leg2b]` — a strip is a short between
+its duplicated legs even unpressed) and appends `[leg1a,leg2a]` while
+pressed (the strip-to-strip bridge). Net resolution treats those like
+extra wires connecting groups of pins, so a press can merge two
+otherwise-separate nets (e.g. closing the demo circuit between 3V3 and
+GPIO15) and a release can split them — no wire edit message involved,
+exactly how `tick()` re-resolves nets every step. The strips can never
+create a driverless shortcut, and since the button can't drive, pressing
+it can never manufacture a new conflict.
+
+---
+
+**Visuals use the published `@wokwi/elements` (MIT) package — vendoring was evaluated, found unnecessary, and reverted**
+
+The hand-drawn canvas SVG got LED and button right-to-left wrong, and
+shouldn't ship "fake hardware" if a real, MIT-licensed hardware
+renderer exists. `@wokwi/elements` provides `wokwi-led` and
+`wokwi-pushbutton` as custom elements with Wokwi's authentic parts
+library visuals; a hand-drawn Pico board not being available there is
+why the board stays as our own SVG. The LED/button visuals are a normal
+**npm dependency** on the published `@wokwi/elements` package.
+
+Vendoring was tried first: one pass copied `led-element.ts`,
+`pushbutton-element.ts` and their `pin.ts`/`keys.ts` deps into
+`src/vendor/wokwi/`, on the belief that our tsconfig
+(`useDefineForClassFields: true`) breaks lit's decorator pattern in raw
+source. That was **reverted as unnecessary.** An isolated probe under
+our actual Vite build showed the published package works unchanged: it
+ships pre-compiled JS where lit's `@property`/`@customElement` are
+already emitted as `__decorate(...)` calls, so
+`useDefineForClassFields` (which only affects TypeScript's own
+class-field emission) never executes against it. The decorator concern
+applies only when *compiling raw wokwi source with our tsconfig*, which
+is not what the package does. Forward rule: **use the published package
+by default; vendor source only as a last resort if a real, confirmed
+blocker is found — and in that case document the specific blocker here,
+not just "it didn't work."**
+
+Scope discipline: adopted only for LED + button, never to become "mix
+every visual language", and the canvas CSS is kept to
+positioning/scaling only, not restyling the parts. Web components
+register once via the side-effect `import "@wokwi/elements"` in
+`main.tsx` (a registry call, not per-component glue). LitElement parses
+DOM attributes as **strings**, so boolean props (`value`, `pressed`)
+are set as JS properties through refs while string props (`color`) go
+in as attributes. jsdom (vitest's DOM) doesn't know custom elements, so
+unit tests never touch them — views `import type` the classes from
+`@wokwi/elements` and the element-runtime import lives in `main.tsx`,
+keeping the element runtime out of test scope. The pin-marker offsets
+still come from the elements' `pinInfo`, verified identical between the
+published `1.9.2` and the cloned source that informed the offsets.
+
+---
+
+**`CircuitCanvas` is an HTML stage under SVG overlays; hit-testing is the DOM, not math**
+
+`CircuitCanvas` no longer draws every graphic in one SVG. The stage is a
+fixed 1200×700 HTML `div` (`data-testid="circuit-stage"`) scaled by CSS
+`transform` from a ResizeObserver measurement, so component bodies stay
+real interactive DOM (drags, mouse press/release) while wires and pins
+are absolute-positioned SVG overlays (`data-layer="wires"`/`"pins"`,
+`pointer-events:none` at the svg, `auto` on individual wire/pin
+groups). `clientToStagePoint()` converts via `getBoundingClientRect` so
+drop/drag math is robust at any zoom (jsdom's zero rect falls back to
+pass-through client coords, which is exactly what vitest wants).
+Component bodies keep `data-testid="body-<id>"` wrappers; hit targets
+remain the component-named testids (`led`, `led-body`, `button`,
+`button-body`). Tests assert on element testids and wrapper
+`style.left/top` for position, never on `<g transform>` strings.

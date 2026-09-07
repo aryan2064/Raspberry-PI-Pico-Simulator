@@ -8,11 +8,14 @@ import type { ComponentKind, PinRef, SnapshotMessage, Topology, WorkerToMainMess
 
 // The demo circuit everyone starts with. Two independent nets so the
 // interactive demo and the Python demo never fight:
-//   - button -> GPIO15 -> LED (press the green button to light it)
-//   - LED2  <-> GPIO16      (driven by the default MicroPython script)
-// LED anodes are the listeners on each net; an OUT pin may not share a net
-// with the button's signal OUT pin (two drivers would hit the engine's
-// conflict placeholder -> FLOATING).
+//   - 3V3 -> button leg1a; button leg2a -> GPIO15 -> LED1. The button is a
+//     passive switch: at rest its strips are open, and GPIO15 (pre-configured
+//     IN with an internal pull-DOWN in pinSetups, the same reason the demo
+//     pre-sets pin state at all — it must work out of the box) keeps the
+//     node LOW so LED1 is off. While held, the switch bridges the two strips
+//     (leg1a-leg2a) up to 3V3 and LED1 lights; on release it drops back LOW.
+//     Press-and-hold the green button to light LED1.
+//   - LED2 <-> GPIO16 (driven by the default MicroPython script)
 const INITIAL_TOPOLOGY: Topology = {
   components: [
     { id: "board", kind: "pico_board" },
@@ -20,12 +23,18 @@ const INITIAL_TOPOLOGY: Topology = {
     { id: "button", kind: "button" },
     { id: "led2", kind: "led" },
   ],
+  // Pin pre-configuration replayed into every fresh worker alongside the
+  // wiring: GPIO15 is an IN input with an internal pull-down (like wiring a
+  // real button with PULL_DOWN software-wise). No Python runs to set this —
+  // it's part of the demo topology itself.
+  pinSetups: [{ type: "setupPin", gpio: 15, mode: "IN", pull: "DOWN" }],
   connections: [
-    { wireId: "w1", from: { componentId: "button", pinLabel: "signal" }, to: { componentId: "board", pinLabel: "GPIO15" } },
-    { wireId: "w2", from: { componentId: "board", pinLabel: "GPIO15" }, to: { componentId: "led", pinLabel: "anode" } },
-    { wireId: "w3", from: { componentId: "led", pinLabel: "cathode" }, to: { componentId: "board", pinLabel: "GND" } },
-    { wireId: "w4", from: { componentId: "led2", pinLabel: "anode" }, to: { componentId: "board", pinLabel: "GPIO16" } },
-    { wireId: "w5", from: { componentId: "led2", pinLabel: "cathode" }, to: { componentId: "board", pinLabel: "GND" } },
+    { wireId: "w1", from: { componentId: "board", pinLabel: "3V3" }, to: { componentId: "button", pinLabel: "leg1a" } },
+    { wireId: "w2", from: { componentId: "button", pinLabel: "leg2a" }, to: { componentId: "board", pinLabel: "GPIO15" } },
+    { wireId: "w3", from: { componentId: "board", pinLabel: "GPIO15" }, to: { componentId: "led", pinLabel: "anode" } },
+    { wireId: "w4", from: { componentId: "led", pinLabel: "cathode" }, to: { componentId: "board", pinLabel: "GND" } },
+    { wireId: "w5", from: { componentId: "led2", pinLabel: "anode" }, to: { componentId: "board", pinLabel: "GPIO16" } },
+    { wireId: "w6", from: { componentId: "led2", pinLabel: "cathode" }, to: { componentId: "board", pinLabel: "GND" } },
   ],
 };
 
@@ -54,7 +63,7 @@ function App() {
   const workerRef = useRef<Worker | null>(null);
   const workerTimerRef = useRef<number | null>(null);
   const respondedRef = useRef(false);
-  const nextWireIdRef = useRef(6); // w1..w5 are taken by the demo wiring
+  const nextWireIdRef = useRef(7); // w1..w6 are taken by the demo wiring
   const nextComponentIdRef = useRef(1); // placed-1, placed-2, ...
 
   // Authoritative topology record — NOT used for rendering (snapshots are).
@@ -149,6 +158,9 @@ function App() {
         pinOwnerIdB: conn.to.componentId,
         pinLabelB: conn.to.pinLabel,
       });
+    }
+    for (const pinSetup of topologyRef.current.pinSetups ?? []) {
+      worker.postMessage(pinSetup);
     }
   }, []);
 

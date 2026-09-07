@@ -105,7 +105,8 @@ async function ensurePyodide(): Promise<any> {
       // this same thread. Writes tick the sim immediately and post a snapshot
       // so the UI reacts even while a Python script holds the worker busy.
       const bridge = {
-        setup: (gpio: number, mode: number) => host.setupPin(gpio, mode),
+        setup: (gpio: number, mode: number, pull?: number | null) =>
+          host.setupPin(gpio, mode, pull),
         read: (gpio: number) => host.readPin(gpio),
         write: (gpio: number, value: number) => {
           host.writePin(gpio, value);

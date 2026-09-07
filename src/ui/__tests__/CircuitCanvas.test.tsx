@@ -50,13 +50,19 @@ function makeSnapshot(
     pico_board: [
       { id: "board:GPIO15", label: "GPIO15" },
       { id: "board:GPIO16", label: "GPIO16" },
+      { id: "board:3V3", label: "3V3" },
       { id: "board:GND", label: "GND" },
     ],
     led: [
       { id: "led:anode", label: "anode" },
       { id: "led:cathode", label: "cathode" },
     ],
-    button: [{ id: "button:signal", label: "signal" }],
+    button: [
+      { id: "button:leg1a", label: "leg1a" },
+      { id: "button:leg1b", label: "leg1b" },
+      { id: "button:leg2a", label: "leg2a" },
+      { id: "button:leg2b", label: "leg2b" },
+    ],
   };
   // conflictedPinIds must be real pin ids (uuids), not labels — the canvas
   // resolves labels to ids through the pins mapping before matching.
@@ -85,12 +91,17 @@ function makeSnapshot(
   };
 }
 
-function makeConnections(wireIds = ["w1", "w2", "w3"]): TopologyConnection[] {
+// Demo wiring (passive button circuit):
+//   w1: board.3V3 -> button.leg1a
+//   w2: board.GPIO15 -> led.anode
+//   w3: button.leg2a -> board.GPIO15
+//   w4: led.cathode -> board.GND
+function makeConnections(wireIds = ["w1", "w2", "w3", "w4"]): TopologyConnection[] {
   const all: TopologyConnection[] = [
     {
       wireId: "w1",
-      from: { componentId: BUTTON.id, pinLabel: "signal" },
-      to: { componentId: BOARD.id, pinLabel: "GPIO15" },
+      from: { componentId: BOARD.id, pinLabel: "3V3" },
+      to: { componentId: BUTTON.id, pinLabel: "leg1a" },
     },
     {
       wireId: "w2",
@@ -99,6 +110,11 @@ function makeConnections(wireIds = ["w1", "w2", "w3"]): TopologyConnection[] {
     },
     {
       wireId: "w3",
+      from: { componentId: BUTTON.id, pinLabel: "leg2a" },
+      to: { componentId: BOARD.id, pinLabel: "GPIO15" },
+    },
+    {
+      wireId: "w4",
       from: { componentId: LED.id, pinLabel: "cathode" },
       to: { componentId: BOARD.id, pinLabel: "GND" },
     },
@@ -168,7 +184,10 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
 
     expect(screen.getByTestId("pin-board-GPIO15")).toBeTruthy();
     expect(screen.getByTestId("pin-led-anode")).toBeTruthy();
-    expect(screen.getByTestId("pin-button-signal")).toBeTruthy();
+    expect(screen.getByTestId("pin-button-leg1a")).toBeTruthy();
+    expect(screen.getByTestId("pin-button-leg1b")).toBeTruthy();
+    expect(screen.getByTestId("pin-button-leg2a")).toBeTruthy();
+    expect(screen.getByTestId("pin-button-leg2b")).toBeTruthy();
   });
 
   it("renders the LED state straight from the snapshot", () => {
@@ -244,7 +263,7 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     rerender(
       <CircuitCanvas
         snapshot={makeSnapshot()}
-        connections={makeConnections(["w1", "w3"])}
+        connections={makeConnections(["w1", "w3", "w4"])}
         positions={defaultPositions()}
         onConnect={vi.fn()}
         onDisconnect={vi.fn()}
@@ -314,14 +333,14 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
   });
 
   it("repositions wire endpoints when a component's position changes", () => {
-    // wire-w2 = board.GPIO15 -> led.anode; led anode offset = (28, 0).
+    // wire-w2 = board.GPIO15 -> led.anode; led anode offset = (25, 42).
     const { rerender } = renderCanvas(makeSnapshot(), makeConnections());
     const visibleLine = (): Element => {
       const g = screen.getByTestId("wire-w2");
       return g.querySelectorAll("line")[1];
     };
-    expect(visibleLine().getAttribute("x2")).toBe("428"); // led at (400,40) + (28,0)
-    expect(visibleLine().getAttribute("y2")).toBe("40");
+    expect(visibleLine().getAttribute("x2")).toBe("425"); // led at (400,40) + (25,42)
+    expect(visibleLine().getAttribute("y2")).toBe("82");
 
     rerender(
       <CircuitCanvas
@@ -337,8 +356,8 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
         onDeleteComponent={vi.fn()}
       />
     );
-    expect(visibleLine().getAttribute("x2")).toBe("528");
-    expect(visibleLine().getAttribute("y2")).toBe("100");
+    expect(visibleLine().getAttribute("x2")).toBe("525"); // led at (500,100) + (25,42)
+    expect(visibleLine().getAttribute("y2")).toBe("142");
   });
 
   describe("selection and deletion", () => {
@@ -355,9 +374,8 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
       selectBody("body-led");
       expect(screen.getByTestId("delete-component")).toBeTruthy();
       expect(
-        document.querySelector('g[data-testid="led"][data-selected="true"]')
+        document.querySelector('div[data-testid="led"][data-selected="true"]')
       ).toBeTruthy();
-      expect(screen.getByTestId("led-body").getAttribute("stroke-width")).toBe("4");
     });
 
     it("deletes the selected component via the Delete button", () => {
@@ -372,7 +390,7 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
       // deleting clears the selection -> the button disappears
       expect(screen.queryByTestId("delete-component")).toBeNull();
       expect(
-        document.querySelector('g[data-testid="led"][data-selected="true"]')
+        document.querySelector('div[data-testid="led"][data-selected="true"]')
       ).toBeNull();
     });
 
@@ -410,7 +428,7 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
 
       expect(screen.queryByTestId("delete-component")).toBeNull();
       expect(
-        document.querySelector('g[data-testid="led"][data-selected="true"]')
+        document.querySelector('div[data-testid="led"][data-selected="true"]')
       ).toBeNull();
     });
 
@@ -465,8 +483,10 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
   });
 
   describe("conflict warning (hasConflict -> conflictedPinIds)", () => {
-    const conflictedButtonGpio = () =>
-      makeSnapshot(false, false, ["button:signal", "board:GPIO15"]);
+    // Wiring 3V3 (OUT HIGH) to GND (OUT LOW) is a genuine two-driver short:
+    // both pins are OUT from the moment the board is added.
+    const conflictedBoardShort = () =>
+      makeSnapshot(false, false, ["board:3V3", "board:GND"]);
     // the stroke line is the second <line> in each wire group; the first is
     // the transparent hit area
     const visibleLine = (wireTestId: string): Element => {
@@ -475,9 +495,8 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     };
 
     it("flag-style wires whose net is conflicted and show a single-wire banner", () => {
-      // button.signal (OUT) and board.GPIO15 (OUT) fight over one net. Only
-      // wire-w1 (signal -> GPIO15) belongs to that net; wire-w3 is untouched.
-      renderCanvas(conflictedButtonGpio(), makeConnections(["w1", "w3"]));
+      // Only w1 (3V3 -> button.leg1a) touches 3V3; w3/w2 don't touch 3V3 or GND.
+      renderCanvas(conflictedBoardShort(), makeConnections(["w1", "w3"]));
 
       expect(screen.getByTestId("wire-w1").getAttribute("data-conflicted")).toBe("true");
       expect(visibleLine("wire-w1").getAttribute("stroke")).toBe("#d81b1b");
@@ -492,11 +511,13 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     });
 
     it("counts every wire on the conflicted net (plural banner)", () => {
-      // wire-w2 (GPIO15 -> led.anode) is on the same affected net.
-      renderCanvas(conflictedButtonGpio(), makeConnections());
+      // w1 (3V3 -> button.leg1a) and w4 (led.cathode -> GND) both touch the
+      // shorted net.
+      renderCanvas(conflictedBoardShort(), makeConnections());
 
       expect(screen.getByTestId("wire-w1").getAttribute("data-conflicted")).toBe("true");
-      expect(screen.getByTestId("wire-w2").getAttribute("data-conflicted")).toBe("true");
+      expect(screen.getByTestId("wire-w4").getAttribute("data-conflicted")).toBe("true");
+      expect(screen.getByTestId("wire-w2").getAttribute("data-conflicted")).toBeNull();
       expect(screen.getByTestId("wire-w3").getAttribute("data-conflicted")).toBeNull();
       expect(screen.getByTestId("conflict-banner").textContent).toContain(
         "2 wire conflicts"
@@ -505,7 +526,7 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
 
     it("clears the styling and hides the banner when the conflict resolves", () => {
       const { rerender } = renderCanvas(
-        conflictedButtonGpio(),
+        conflictedBoardShort(),
         makeConnections(["w1"])
       );
       expect(screen.getByTestId("conflict-banner")).toBeTruthy();

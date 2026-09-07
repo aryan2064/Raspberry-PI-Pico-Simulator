@@ -8,6 +8,7 @@ import type {
   PressReleaseMessage,
   RemoveComponentMessage,
   RunMessage,
+  SetupPinMessage,
   SnapshotMessage,
 } from "./messages";
 
@@ -70,6 +71,9 @@ export class CircuitHost {
         break;
       case "removeComponent":
         this.removeComponent(msg);
+        break;
+      case "setupPin":
+        this.setupPinMessage(msg);
         break;
     }
   }
@@ -148,6 +152,20 @@ export class CircuitHost {
     return component;
   }
 
+  // The message form of the machine.Pin bridge's setup, used by the app's
+  // initial topology setup/replay to pre-configure a board pin without
+  // running any Python — e.g. the demo button circuit's GPIO15 (IN with an
+  // internal pull-down). Mirrors machine.Pin(id, mode, pull) in the engine's
+  // own vocabulary.
+  setupPinMessage(msg: SetupPinMessage): void {
+    const pin = this.board().pin(`GPIO${msg.gpio}`);
+    pin.mode = msg.mode;
+    pin.pull = msg.pull ?? "NONE";
+    // A pull must be live immediately (e.g. machine.Pin(id, IN, PULL_UP)
+    // followed by an immediate read), not one tick later — so resolve now.
+    this.circuit.resolveNow();
+  }
+
   // ---- one simulation step + snapshot (driven by the worker's own loop) ----
 
   tick(dt = 1 / 60): void {
@@ -178,9 +196,15 @@ export class CircuitHost {
   // ---- machine.Pin bridge (worker -> Pyodide -> here, all one thread) ----
 
   // mode: 0 = IN, 1 = OUT (mirrors the machine.Pin.IN / OUT constants).
-  setupPin(gpio: number, mode: number): void {
+  // pull: machine.Pin.PULL_UP / PULL_DOWN numeric id (2 / 3); anything else
+  // (omitted, null, or some PULL_NONE-like value) maps to no pull.
+  setupPin(gpio: number, mode: number, pull?: number | null): void {
     const pin = this.board().pin(`GPIO${gpio}`);
     pin.mode = mode === 0 ? "IN" : "OUT";
+    pin.pull = pull === 2 ? "UP" : pull === 3 ? "DOWN" : "NONE";
+    // Same immediacy as setupPinMessage: a read right after Pin(...) constructor
+    // must already reflect the pull (or the lack of one).
+    this.circuit.resolveNow();
   }
 
   readPin(gpio: number): number {

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { ComponentKind } from "../execution/messages";
 
 // Custom MIME type used for palette -> canvas native-drag payloads. Using a
@@ -9,8 +10,31 @@ type PaletteKind = Extract<ComponentKind, "led" | "button">;
 
 const PALETTE_ITEMS: Array<{ kind: PaletteKind; label: string; hint: string }> = [
   { kind: "led", label: "LED", hint: "anode / cathode" },
-  { kind: "button", label: "Button", hint: "signal HIGH while pressed" },
+  { kind: "button", label: "Button", hint: "bridges both strips while pressed" },
 ];
+
+// Small live previews of the real wokwi elements. The custom elements are
+// registered in main.tsx (browser only); in tests they simply render as
+// unrecognized tags, which is harmless here.
+function PalettePreview({ kind }: { kind: PaletteKind }) {
+  const previewStyle: CSSProperties = {
+    transform: "scale(0.6)",
+    transformOrigin: "top left",
+    pointerEvents: "none",
+  };
+  return (
+    <div
+      style={{
+        ...previewStyle,
+        width: kind === "led" ? 24 : 40,
+        height: kind === "led" ? 30 : 27,
+        marginBottom: 4,
+      }}
+    >
+      {kind === "led" ? <wokwi-led /> : <wokwi-pushbutton color="#4caf50" />}
+    </div>
+  );
+}
 
 // Sidebar of draggable part types. Purely presentational: each entry only
 // publishes its component KIND into the native drag payload — the canvas owns
@@ -52,10 +76,11 @@ export function ComponentPalette() {
             userSelect: "none",
             background: "#f7f7f9",
           }}
-        >
-          <div style={{ fontWeight: 700 }}>{item.label}</div>
-          <div style={{ fontSize: 11, color: "#555" }}>{item.hint}</div>
-        </div>
+>
+            <PalettePreview kind={item.kind} />
+            <div style={{ fontWeight: 700 }}>{item.label}</div>
+            <div style={{ fontSize: 11, color: "#555" }}>{item.hint}</div>
+          </div>
       ))}
       <p style={{ fontSize: 11, color: "#666", margin: "0.5rem 0 0" }}>
         Drag a part onto the canvas, then click pins to wire it. Drag a part's

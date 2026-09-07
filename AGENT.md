@@ -57,10 +57,19 @@ that's the one rule this project cannot bend on. See
   (abstract base), `Circuit` (union-find net resolution + `tick(dt)`)
 - [x] `PicoBoard` component (GPIO0–GPIO28, 3V3, GND)
 - [x] `LED` component (on/off only, no brightness — deliberately minimal)
-- [x] `Button` component (drives `signal` HIGH/LOW from `press()`/`release()`;
-      second real component, built to exercise the driver side of net
-      resolution — an `OUT` pin driving nets — ahead of the canvas work
-      that will need a user-interactive input component)
+- [x] `Button` component — a **passive switch**, not a driver: four
+      `UNSET` legs (`leg1a`/`leg1b`/`leg2a`/`leg2b`). A real push button
+      has two mechanical strips, each duplicated to two corners of the
+      body, so `getInternalConnections()` **always** returns the two
+      permanent pairs (`[leg1a,leg1b]`, `[leg2a,leg2b]` — each strip
+      shorts its duplicated legs even unpressed) and while pressed adds
+      `[leg1a,leg2a]` (strip-to-strip bridge, exactly the press action).
+      The net resolver treats these like extra wires: presses merge
+      nets, releases split them, with no wire edit and no way to create
+      a driver conflict. Combined with `Pin.pull` (UP/DOWN/NONE net
+      fallback; never a driver, never a conflict source) this is how the
+      demo button lights its LED: 3V3 → button.leg1a → button.leg2a →
+      GPIO15 (IN, pull-down) → LED anode.
 - [x] Vite + React + TypeScript project scaffolded (project root), builds
       and typechecks clean, `npm run dev` shows the interactive canvas
       (button → LED demo)
@@ -76,9 +85,10 @@ that's the one rule this project cannot bend on. See
       (real-Pyodide end-to-end; run with `npm run verify:python`).
       `src/test/setup.ts` patches jsdom's missing `crypto.randomUUID`
       (the engine's `newId()`), registered via `test.setupFiles`.
-      Current totals after the delete + conflict milestones: **60
-      passing + 1 skipped** (10 engine / 4 analog / 3 button / 11
-      CircuitHost / 23 canvas / 9 App).
+      Current totals: **74 passing + 1 skipped** (18 Circuit / 4 analog /
+      6 button / 14 CircuitHost / 23 canvas / 9 App /
+      Pyodide.integration skipped by default — run it with
+      `npm run verify:python`).
 - [x] Analog value channel on `Pin` (`analogValue: number | null`, 0–1
       duty for OUT pins) + analog propagation step in `Circuit.tick()`,
       independent of the digital channel; covered by
@@ -86,22 +96,38 @@ that's the one rule this project cannot bend on. See
       **Note:** `machine.PWM` shim and LED brightness are still
       separate, un-started work — committing to the channel does
       not do either of those.
-- [x] Canvas rendering — SVG in `src/ui/`
+- [x] Canvas rendering — in `src/ui/`
       (`CircuitCanvas.tsx` + `components/{LedView,PicoBoardView,
-      ButtonView}.tsx`). Three explicit SVG layers, painted
-      bodies → wires → pins (so wires always sit on top of component
-      bodies and pins stay visible/clickable on top of everything).
-      Since the execution milestone this is a **snapshot renderer +
-      relay**: it draws components from worker `snapshot` messages via
-      exhaustive render dispatch and emits `onConnect`/`onDisconnect`/
-      `onPress`/`onRelease` callbacks — it owns no engine objects and
-      never talks to the worker (the parent `App` relays). Click-to-wire
-      pin connections (first click = pending source, second click on a
-      different pin = connect, same pin twice = cancel); wires are
-      clickable with a wide transparent hit-area + hover highlight, and
-      clicking a wire triggers a `disconnect` relay. Verified by jsdom
-      UI tests. The ~60fps `circuit.tick(1/60)` loop lives **inside the
-      worker** now (see execution bullet below).
+      ButtonView}.tsx`). Since the execution milestone it is a
+      **snapshot renderer + relay** that owns no engine objects and
+      never talks to the worker (the parent `App` relays). Since the
+      wokwi milestone it renders a fixed 1200×700 HTML stage
+      (`data-testid="circuit-stage"`) scaled by a CSS transform from a
+      ResizeObserver, with component bodies as absolute-positioned divs
+      (`data-testid="body-<id>"`) — real interactive DOM — under two SVG
+      overlays (`data-layer="wires"|"pins"`, `pointer-events:none`
+      svgs, `auto` on individual wire/pin groups). The overlays carry
+      the **same `transform: scale()`** as the stage (both pin/wire SVG
+      coords stay in stage units), and each marker sits at its body
+      origin + the wokwi element offset (LED anode `(25,42)`/
+      cathode `(15,42)`; button `1.l(0,13)`/`1.r(67,13)`/`2.l(0,32)`/
+      `2.r(67,32)`; board GPIO0–28 `x = 14 + i*10`, `3V3`=304, `GND`=314,
+      `y`=112) — asserted to sub-pixel in browser-verify step 1b. LED
+      and button visuals are the **published `@wokwi/elements`** (MIT)
+      package custom elements, registered once via the side-effect
+      `import "@wokwi/elements"` in `main.tsx` and driven through refs
+      — boolean props set as JS properties because LitElement reads
+      attributes as strings. They are a normal npm dependency (a
+      vendoring attempt was evaluated and reverted as unnecessary since
+      the package ships pre-compiled JS; see `docs/DECISIONS.md`); the
+      pin offsets come from the elements' `pinInfo`. The board stays a
+      hand-drawn SVG. All client→stage
+      coordinate math goes through `clientToStagePoint()` (drop/drag
+      robust at any scale). Click-to-wire pin connections, clickable
+      wires with a wide transparent hit-area + hover highlight, and
+      disconnect relay all still apply (wires/pins testids unchanged).
+      Verified by updated jsdom UI tests. The ~60fps
+      `circuit.tick(1/60)` loop lives **inside the worker**.
 - [x] Code execution: Pyodide in a Web Worker with a `machine.Pin`
       shim. The worker owns the live `Circuit` (`CircuitHost` in
       `src/execution/worker-core.ts`, no Worker/Pyodide APIs — unit
@@ -140,12 +166,14 @@ that's the one rule this project cannot bend on. See
       (`src/ui/ComponentPalette.tsx`, `src/App.tsx`,
       `src/App.test.tsx`): the palette offers LED and Button (no second
       board — PicoBoard stays a singleton) as HTML5 drag sources; dropping
-      on the canvas converts screen→SVG coords
-      (`getScreenCTM().inverse()`, with a client-coords fallback for
-      jsdom) and appends the component to the topology record under a
+      on the canvas converts client coords to stage coords via
+      `clientToStagePoint()` (`getBoundingClientRect`-based, with a
+      client-coords pass-through fallback where no usable rect exists,
+      e.g. jsdom) and appends the component to the topology record under a
       fresh `placed-N` id, posting the same `addComponent` message the
       init/replay path uses — the worker treats it identically whenever
-      it arrives. Positions are **UI-only** React state
+      it arrives. Positions are **UI-only** React
+      state
       (`Record<componentId, {x,y}>`), never sent to the worker, so they
       survive Stop/respawn untouched. Existing component bodies drag to
       move via pointer events past a 4px threshold (below which button
@@ -177,12 +205,21 @@ that's the one rule this project cannot bend on. See
       a `⚠ N wire conflicts` banner (warning, not prevention — see
       DECISIONS). Net resolution itself is unchanged (still
       `FLOATING`/`null`). Verified by engine + CircuitHost + canvas
-      tests and a browser-verify step (wire board OUT pin to button
-      signal → red dashed wire + banner; disconnect → cleared).
+      tests and a browser-verify step (3V3↔GND short → red dashed
+      wires + "4 wire conflicts" banner; disconnect → cleared). A
+      passive button press can merge two already-conflicting nets, but
+      the button itself can never create a conflict.
+- [x] Pin pulls + passive button (see the `Button` bullet above) — the
+      `machine.Pin(..., PULL_UP|PULL_DOWN)` third argument and the app's
+      `setupPin` replay both resolve immediately via the new
+      `Circuit.resolveNow()` (a pull must be live the instant it's
+      configured; a busy-waiting script froze the tick loop, so waiting a
+      tick was not an option). Verified by CircuitHost tests + the real
+      Pyodide integration test (`npm run verify:python`).
 - [ ] Validation / error states beyond conflict detection (undeclared
       pins, unmapped Python pin numbers, etc.) — not started.
-- [ ] Component library beyond LED — not started (intentionally; see
-      "Don't pre-build" rule in `docs/ROADMAP.md`)
+- [ ] Component library beyond LED/Button/pulls — not started
+      (intentionally; see "Don't pre-build" rule in `docs/ROADMAP.md`)
 
 ## Where to go next
 

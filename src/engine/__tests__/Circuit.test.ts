@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { Circuit, PicoBoard, LED } from "../index";
+import { Circuit, PicoBoard, LED, Button } from "../index";
 
 describe("Circuit net resolution", () => {
   let circuit: Circuit;
@@ -193,5 +193,171 @@ describe("Circuit conflict detection (hasConflict)", () => {
     expect(led.pin("anode").hasConflict).toBe(true);
     expect(board.pin("GPIO0").hasConflict).toBe(true);
     expect(board.pin("GPIO1").hasConflict).toBe(true);
+  });
+});
+
+describe("Circuit pull resistor fallback (digital only)", () => {
+  let circuit: Circuit;
+  let board: PicoBoard;
+
+  beforeEach(() => {
+    circuit = new Circuit();
+    board = new PicoBoard();
+    circuit.addComponent(board);
+  });
+
+  it("resolves a driverless net to LOW when any pin pulls DOWN", () => {
+    circuit.connect(board.pin("GPIO0"), board.pin("GPIO1"));
+    circuit.resolveNets();
+    board.pin("GPIO0").mode = "IN";
+    board.pin("GPIO0").pull = "DOWN";
+    board.pin("GPIO1").mode = "IN";
+
+    circuit.tick(1 / 60);
+    expect(board.pin("GPIO0").value).toBe("LOW");
+    expect(board.pin("GPIO1").value).toBe("LOW");
+  });
+
+  it("resolves a driverless net to HIGH when any pin pulls UP", () => {
+    circuit.connect(board.pin("GPIO0"), board.pin("GPIO1"));
+    circuit.resolveNets();
+    board.pin("GPIO0").mode = "IN";
+    board.pin("GPIO0").pull = "UP";
+    board.pin("GPIO1").mode = "IN";
+
+    circuit.tick(1 / 60);
+    expect(board.pin("GPIO0").value).toBe("HIGH");
+    expect(board.pin("GPIO1").value).toBe("HIGH");
+  });
+
+  it("lets an active driver override any pull", () => {
+    circuit.connect(board.pin("GPIO0"), board.pin("GPIO1"));
+    circuit.resolveNets();
+    board.pin("GPIO0").mode = "OUT";
+    board.pin("GPIO0").value = "LOW"; // active LOW despite a pull-UP
+    board.pin("GPIO0").pull = "UP";
+    board.pin("GPIO1").mode = "IN";
+    board.pin("GPIO1").pull = "UP";
+
+    circuit.tick(1 / 60);
+    expect(board.pin("GPIO1").value).toBe("LOW"); // driver wins
+
+    board.pin("GPIO0").value = "HIGH"; // now driver is HIGH with pull-DOWN
+    board.pin("GPIO0").pull = "DOWN";
+    circuit.tick(1 / 60);
+    expect(board.pin("GPIO1").value).toBe("HIGH"); // driver wins
+  });
+
+  it("resolves a driverless net with both UP and DOWN pulls to FLOATING (documented simplification)", () => {
+    circuit.connect(board.pin("GPIO0"), board.pin("GPIO1"));
+    circuit.resolveNets();
+    board.pin("GPIO0").mode = "IN";
+    board.pin("GPIO0").pull = "UP";
+    board.pin("GPIO1").mode = "IN";
+    board.pin("GPIO1").pull = "DOWN";
+
+    circuit.tick(1 / 60);
+    expect(board.pin("GPIO0").value).toBe("FLOATING");
+    expect(board.pin("GPIO1").value).toBe("FLOATING");
+  });
+
+  it("does not let pulls affect the conflict flag — listeners still FLOATING", () => {
+    // Two OUT pins fight over one net; both also carry opposite pulls. The
+    // pulls must NOT leak into the resolution: a multi-driver net is a
+    // conflict (FLOATING for listeners), never "pulled HIGH/LOW".
+    circuit.connect(board.pin("GPIO0"), board.pin("GPIO1"));
+    circuit.connect(board.pin("GPIO1"), board.pin("GPIO2"));
+    circuit.resolveNets();
+    board.pin("GPIO0").mode = "OUT";
+    board.pin("GPIO0").value = "HIGH";
+    board.pin("GPIO0").pull = "UP";
+    board.pin("GPIO1").mode = "OUT";
+    board.pin("GPIO1").value = "LOW";
+    board.pin("GPIO1").pull = "DOWN";
+    board.pin("GPIO2").mode = "IN";
+
+    circuit.tick(1 / 60);
+    // The listener sees FLOATING (the two-driver short), not a pulled value.
+    expect(board.pin("GPIO2").value).toBe("FLOATING");
+    // Drivers keep driving their own value — propagate() never clobbers an
+    // OUT pin, so dropping this conflict later restores the survivor's drive.
+    expect(board.pin("GPIO0").value).toBe("HIGH");
+    expect(board.pin("GPIO1").value).toBe("LOW");
+    expect(board.pin("GPIO0").hasConflict).toBe(true);
+    expect(board.pin("GPIO1").hasConflict).toBe(true);
+    expect(board.pin("GPIO2").hasConflict).toBe(true);
+  });
+});
+
+describe("Circuit HasInternalConnections (dynamic net merge/split)", () => {
+  let circuit: Circuit;
+  let board: PicoBoard;
+  let button: Button;
+
+  beforeEach(() => {
+    circuit = new Circuit();
+    board = new PicoBoard();
+    button = new Button();
+    circuit.addComponent(board);
+    circuit.addComponent(button);
+  });
+
+  it("merges two nets when the button is pressed (via resolveNets every tick)", () => {
+    // Each side of the button connects to a different net; while open the
+    // strips (and therefore the two sides) are separate nets.
+    circuit.connect(button.pin("leg1a"), board.pin("GPIO0"));
+    circuit.connect(button.pin("leg2a"), board.pin("GPIO1"));
+    circuit.resolveNets();
+    expect(button.pin("leg1a").netId).not.toBe(button.pin("leg2a").netId);
+    // The permanent strip shorts hold even unpressed.
+    expect(button.pin("leg1a").netId).toBe(button.pin("leg1b").netId);
+    expect(button.pin("leg2a").netId).toBe(button.pin("leg2b").netId);
+
+    board.pin("GPIO0").mode = "OUT";
+    board.pin("GPIO0").value = "HIGH";
+    board.pin("GPIO1").mode = "IN";
+
+    button.press();
+    // Pressing sets closed=true, but the net groupings must be re-done by
+    // resolveNets. With tick() calling resolveNets() as its first step, a
+    // plain tick() is enough — no manual resolveNets() call needed.
+    circuit.tick(1 / 60);
+    expect(button.pin("leg1a").netId).toBe(button.pin("leg2a").netId);
+    expect(board.pin("GPIO1").value).toBe("HIGH");
+  });
+
+  it("splits the nets again when the button is released", () => {
+    circuit.connect(button.pin("leg1a"), board.pin("GPIO0"));
+    circuit.connect(button.pin("leg2a"), board.pin("GPIO1"));
+    circuit.resolveNets();
+    board.pin("GPIO0").mode = "OUT";
+    board.pin("GPIO0").value = "HIGH";
+    board.pin("GPIO1").mode = "IN";
+
+    button.press();
+    circuit.tick(1 / 60);
+    expect(board.pin("GPIO1").value).toBe("HIGH");
+
+    button.release();
+    circuit.tick(1 / 60);
+    // Net split: GPIO1's net is driverless -> FLOATING.
+    expect(board.pin("GPIO1").value).toBe("FLOATING");
+    expect(button.pin("leg1a").netId).not.toBe(button.pin("leg2a").netId);
+  });
+
+  it("HasInternalConnections does not create conflicts — 3V3 + button short is single-driver", () => {
+    circuit.connect(board.pin("3V3"), button.pin("leg1a"));
+    circuit.connect(button.pin("leg2a"), board.pin("GPIO15"));
+    circuit.resolveNets();
+    board.pin("GPIO15").mode = "IN";
+    board.pin("GPIO15").pull = "DOWN";
+
+    button.press();
+    circuit.tick(1 / 60);
+    // 3V3 is the only OUT driver; button is passive; GPIO15 is IN.
+    // One driver -> no conflict.
+    expect(board.pin("GPIO15").value).toBe("HIGH");
+    expect(board.pin("GPIO15").hasConflict).toBe(false);
+    expect(board.pin("3V3").hasConflict).toBe(false);
   });
 });

@@ -1,41 +1,44 @@
-import type { PinOffsetMap, Vec } from "../types";
+import { useEffect, useRef } from "react";
+import type { LEDElement } from "@wokwi/elements";
+import type { PinOffsetMap } from "../types";
 
-const LED_W = 56;
-const LED_H = 64;
-
-// anode leads out the top, cathode out the bottom.
+// wokwi-led pin geometry (from its pinInfo): both leads run out of the
+// bottom edge — anode is the right lead, cathode the left.
 export const ledPinOffsets: PinOffsetMap = {
-  anode: { x: LED_W / 2, y: 0 },
-  cathode: { x: LED_W / 2, y: LED_H },
+  anode: { x: 25, y: 42 },
+  cathode: { x: 15, y: 42 },
 };
 
 interface LedViewProps {
   renderInfo: { type: "led"; isOn: boolean };
-  position: Vec;
   // UI-only selection highlight, driven by CircuitCanvas's selected state.
   selected?: boolean;
 }
 
-// Purely presentational: renders the LED body only. Pin markers are drawn by
-// CircuitCanvas in a dedicated layer above wires.
-export function LedView({ renderInfo, position, selected }: LedViewProps) {
+// Renders the real <wokwi-led> web component (registered in main.tsx). The
+// boolean `value` is set as a JS property via a ref: LitElement @property
+// reads attributes as strings, so even value="false" would be truthy.
+// The visible DOM (testid/state attributes) lives on THIS component's own
+// elements so jsdom tests and the browser-verify state() queries keep
+// working without the shadow-DOM internals.
+export function LedView({ renderInfo, selected }: LedViewProps) {
   const { isOn } = renderInfo;
+  const ledRef = useRef<LEDElement | null>(null);
+  useEffect(() => {
+    if (ledRef.current) ledRef.current.value = isOn;
+  }, [isOn]);
   return (
-    <g
-      transform={`translate(${position.x} ${position.y})`}
+    <div
       data-testid="led"
       data-selected={selected ? "true" : "false"}
+      style={{
+        outline: selected ? "3px solid #ffd500" : "none",
+        outlineOffset: 2,
+      }}
     >
-      <circle
-        cx={LED_W / 2}
-        cy={LED_H / 2}
-        r={22}
-        fill={isOn ? "#ff3b30" : "#e4e4e6"}
-        stroke={selected ? "#ffd500" : isOn ? "#c22" : "#b8b8bc"}
-        strokeWidth={selected ? 4 : 2}
-        data-testid="led-body"
-        data-on={isOn ? "true" : "false"}
-      />
-    </g>
+      <div data-testid="led-body" data-on={isOn ? "true" : "false"}>
+        <wokwi-led ref={ledRef} />
+      </div>
+    </div>
   );
 }

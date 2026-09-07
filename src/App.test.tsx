@@ -57,9 +57,9 @@ private emitSnapshot(): void {
     // the real worker re-reads engine pin ids each tick. No conflict is ever
     // emitted by the fake worker, so conflictedPinIds stays empty.
     const pinLabels: Record<string, string[]> = {
-      pico_board: ["GPIO15", "GPIO16", "GPIO17", "GND"],
+      pico_board: ["GPIO15", "GPIO16", "GPIO17", "GND", "3V3"],
       led: ["anode", "cathode"],
-      button: ["signal"],
+      button: ["leg1a", "leg1b", "leg2a", "leg2b"],
     };
     this.onmessage?.({
       data: {
@@ -91,15 +91,15 @@ function workerMessages(w: FakeWorker): Record<string, unknown>[] {
   return w.messages as Record<string, unknown>[];
 }
 
-// The drag wrapper `body-<id>` only carries the pointer handlers; the actual
-// position lives on the inner view group's transform, so find an LED body
-// whose group sits at the expected canvas position.
-function ledGroupAt(transform: string): Element | null {
-  return (
-    [...document.querySelectorAll('g[data-testid="led"]')].find(
-      (g) => g.getAttribute("transform") === transform
-    ) ?? null
-  );
+// The drag wrapper `body-<id>` carries both the pointer handlers and the
+// component's position (absolutely positioned with left/top in stage coords).
+function bodyPosition(bodyTestId: string): { x: number; y: number } | null {
+  const el = document.querySelector(`[data-testid="${bodyTestId}"]`);
+  if (!el) return null;
+  return {
+    x: parseFloat((el as HTMLElement).style.left),
+    y: parseFloat((el as HTMLElement).style.top),
+  };
 }
 
 // Selects a component with a plain click (no drag): pointer-down + pointer-up
@@ -150,7 +150,7 @@ describe("App (worker lifecycle + palette placement)", () => {
     // The first spawn rebuilt the whole demo topology.
     const messages = workerMessages(lastWorker());
     expect(messages.filter((m) => m.type === "addComponent")).toHaveLength(4);
-    expect(messages.filter((m) => m.type === "connect")).toHaveLength(5);
+    expect(messages.filter((m) => m.type === "connect")).toHaveLength(6);
 
     expect(screen.getByTestId("pico-board")).toBeTruthy();
     expect(screen.getByTestId("body-led")).toBeTruthy();
@@ -166,7 +166,7 @@ describe("App (worker lifecycle + palette placement)", () => {
     // The worker acked the addComponent with a snapshot, so the new LED
     // renders at the drop position.
     expect(screen.getByTestId("body-placed-1")).toBeTruthy();
-    expect(ledGroupAt("translate(600 300)")).toBeTruthy();
+    expect(bodyPosition("body-placed-1")).toEqual({ x: 600, y: 300 });
     expect(screen.getAllByTestId("led-body")).toHaveLength(3); // 2 demo + 1 placed
 
     expect(
@@ -187,7 +187,7 @@ describe("App (worker lifecycle + palette placement)", () => {
       workerMessages(lastWorker()).some(
         (m) =>
           m.type === "connect" &&
-          m.wireId === "w6" &&
+          m.wireId === "w7" &&
           m.pinOwnerIdA === "placed-1" &&
           m.pinLabelA === "anode" &&
           m.pinOwnerIdB === "board" &&
@@ -217,13 +217,13 @@ it("keeps a placed component (and its wire) after Stop respawns the worker", () 
       workerMessages(replayed).some((m) => m.type === "addComponent" && m.componentId === "placed-1" && m.kind === "led")
     ).toBe(true);
     expect(
-      workerMessages(replayed).some((m) => m.type === "connect" && m.wireId === "w6")
+      workerMessages(replayed).some((m) => m.type === "connect" && m.wireId === "w7")
     ).toBe(true);
 
     // And the UI re-rendered from the fresh worker's replay snapshots: the
     // placed LED is back at the same position (plain React state survived).
     expect(screen.getByTestId("body-placed-1")).toBeTruthy();
-    expect(ledGroupAt("translate(600 300)")).toBeTruthy();
+    expect(bodyPosition("body-placed-1")).toEqual({ x: 600, y: 300 });
     expect(screen.getByTestId("pico-board")).toBeTruthy();
   });
 
@@ -232,18 +232,22 @@ it("keeps a placed component (and its wire) after Stop respawns the worker", () 
     dropLed(screen.getByTestId("circuit-canvas"), 600, 300);
     fireEvent.click(screen.getByTestId("pin-placed-1-anode"));
     fireEvent.click(screen.getByTestId("pin-board-GPIO17"));
-    expect(screen.getByTestId("wire-w6")).toBeTruthy();
+    expect(screen.getByTestId("wire-w7")).toBeTruthy();
 
     // A plain click selects the LED; it shows the highlight and the button.
     selectBody("body-placed-1");
-    expect(ledGroupAt("translate(600 300)")?.getAttribute("data-selected")).toBe("true");
+    expect(
+      document.querySelector(
+        '[data-testid="body-placed-1"] [data-testid="led"][data-selected="true"]'
+      )
+    ).toBeTruthy();
     expect(screen.getByTestId("delete-component")).toBeTruthy();
 
     fireEvent.click(screen.getByTestId("delete-component"));
 
     // The LED and its wire disappear from the render…
     expect(screen.queryByTestId("body-placed-1")).toBeNull();
-    expect(screen.queryByTestId("wire-w6")).toBeNull();
+    expect(screen.queryByTestId("wire-w7")).toBeNull();
     expect(screen.getAllByTestId("led-body")).toHaveLength(2); // just the demo LEDs
     // …and the worker was told to remove it (cascading the wire there too).
     expect(
@@ -267,7 +271,7 @@ it("keeps a placed component (and its wire) after Stop respawns the worker", () 
     fireEvent.keyDown(window, { key: "Backspace" });
 
     expect(screen.queryByTestId("body-placed-1")).toBeNull();
-    expect(screen.queryByTestId("wire-w6")).toBeNull();
+    expect(screen.queryByTestId("wire-w7")).toBeNull();
     expect(
       workerMessages(lastWorker()).some(
         (m) => m.type === "removeComponent" && m.componentId === "placed-1"
@@ -313,12 +317,12 @@ it("keeps a placed component (and its wire) after Stop respawns the worker", () 
       workerMessages(replayed).some((m) => m.type === "addComponent" && m.componentId === "placed-1")
     ).toBe(false);
     expect(
-      workerMessages(replayed).some((m) => m.type === "connect" && m.wireId === "w6")
+      workerMessages(replayed).some((m) => m.type === "connect" && m.wireId === "w7")
     ).toBe(false);
 
-    // The UI stays clean: no placed LED, no w6 wire, demo wiring intact.
+    // The UI stays clean: no placed LED, no w7 wire, demo wiring intact.
     expect(screen.queryByTestId("body-placed-1")).toBeNull();
-    expect(screen.queryByTestId("wire-w6")).toBeNull();
+    expect(screen.queryByTestId("wire-w7")).toBeNull();
     expect(screen.getByTestId("wire-w2")).toBeTruthy();
     expect(screen.getByTestId("pico-board")).toBeTruthy();
   });

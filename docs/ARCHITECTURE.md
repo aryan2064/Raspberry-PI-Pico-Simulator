@@ -16,7 +16,9 @@ src/
     components/
       LED.ts
       PicoBoard.ts
+      Button.ts
   ui/           React + canvas. Imports from engine, never the reverse.
+    (renders LED/button bodies via @wokwi/elements custom elements)
   execution/    Pyodide + machine shim. Imports from engine, never the reverse.
 ```
 
@@ -47,9 +49,15 @@ Represents one connection point on a component.
   physical GPIO15 pin object.
 - `mode` — `IN | OUT | UNSET`. Determines whether a pin can drive a net
   or only listen to it.
+- `pull` — `UP | DOWN | NONE`, default `NONE`. A digital **fallback**
+  value for `IN` pins, applied only when their net has no driver. It is
+  not a driver: any single OUT pin in the net overrides it, UP and DOWN
+  together with no driver still resolve `FLOATING`, and pulls never
+  contribute to conflict detection. See "Circuit" below and
+  `docs/DECISIONS.md`.
 - `value` — `HIGH | LOW | FLOATING`. Computed by net resolution for
-  `IN` pins; set directly by component logic (or later, the Python
-  shim) for `OUT` pins.
+  `IN` pins; set directly by component logic (or the Python shim) for
+  `OUT` pins.
 - `analogValue` — `number | null`, default `null`. A separate, optional
   analog channel, independent of `value`. For an `OUT` pin it represents
   a PWM duty cycle (range 0–1); for an `IN` pin it's the analog value
@@ -88,6 +96,11 @@ abstract class Component {
   abstract update(dt: number): void;
   abstract getRenderInfo(): RenderInfo;
 }
+
+// Optional; built-in wires hidden from the user's wire list.
+interface HasInternalConnections {
+  getInternalConnections(): Array<[Pin, Pin]>;
+}
 ```
 
 - `pin(label)` throws on a missing label rather than returning
@@ -95,6 +108,19 @@ abstract class Component {
   component), not a case to handle gracefully — better to fail loudly
   at the call site than propagate a silent `FLOATING` value that's
   confusing three steps later.
+- `getInternalConnections()` (via `HasInternalConnections`) is a
+  component's own internal wiring — `Circuit` treats the returned pin
+  pairs exactly like additional wires when grouping nets, so a passive
+  component can merge/split nets without touching the wire list or
+  emitting an edit. Currently only
+  the button uses it: always `[["leg1a","leg1b"],["leg2a","leg2b"]]`
+  (each mechanical strip is a short between its duplicated legs, so a
+  strip keeps both legs coterminal even unpressed) plus
+  `["leg1a","leg2a"]` while pressed (the strip-to-strip bridge).
+  Because the button never drives, opening/closing it can
+  never fabricate a new driver conflict — at most it merges two
+  already-conflicting nets together (the "4 wire conflicts" case in the
+  demo).
 - `update(dt)` runs once per simulation tick, **after** net resolution
   and value propagation — so a component's `update()` can trust that
   its `IN` pins already reflect the current net state for this tick.
@@ -130,14 +156,22 @@ built. Don't pre-add variants for components that don't exist yet.
 Owns all components and wires. Two responsibilities, deliberately kept
 separate:
 
-1. **`resolveNets()`** — union-find over the wire list, grouping
-   connected pins into nets. Called only when wiring changes (add/
-   remove a wire), not every tick — recomputing this every frame would
-   be wasted work since wiring is comparatively rare compared to ticks.
+1. **`resolveNets()`** — union-find over the wire list **plus every
+   component's `getInternalConnections()`**, grouping connected pins into
+   nets. Called on every `tick()`, not just when wiring changes: a
+   passive switch can merge or split nets between ticks without any
+   wire edit, so net membership can never be assumed current. (It also
+   runs directly after `connect`/`disconnect`/`removeComponent` via
+   `CircuitHost`, and on pull setup — see `resolveNow()` below.)
 2. **`tick(dt)`** — the per-frame simulation step:
    a. For each net, look at all `OUT`-mode pins in it (the "drivers").
    b. If exactly one driver, the net's value is that driver's value.
-   c. If zero drivers, the net is `FLOATING`.
+   c. If zero drivers, the net resolves from pins' **pull** settings:
+      at least one `pull: "UP"` → `HIGH`; else at least one
+      `pull: "DOWN"` → `LOW`; else `FLOATING`. A pull is purely a
+      fallback — it never acts as a driver, one UP and one DOWN with
+      no driver still resolve `FLOATING`, and pulls contribute nothing
+      to conflict detection.
    d. If more than one driver, this is a real conflict (two outputs
       fighting over one net) — the net resolves to `FLOATING` as a
       placeholder, and every pin in it is flagged `hasConflict = true`
@@ -161,13 +195,24 @@ separate:
       **same** `tick()`, rather than one tick later. This is why an input
       press is visible to net listeners before `tick()` returns.
 
+   **`resolveNow()`** — `resolveNets()` + `propagate()` only, no
+   `update()` and no time advance. It exists for callers that mutate pin
+   properties directly and need the result live immediately instead of
+   on the next tick. `CircuitHost` calls it from both `setupPin` (the
+   `machine.Pin` bridge) and `setupPinMessage` (the app's replay path):
+   otherwise `Pin(17, IN, PULL_UP)` would only take effect on the next
+   tick — and under a busy-waiting script there are no ticks, so the
+   pull would never land.
+
 ### Conflict detection (`hasConflict`)
 
 Both propagation passes compute the conflict condition as
 `digital drivers > 1 || analog drivers > 1` per net (each pass re-reads
 *both* channel counts, so a digital-only conflict survives the analog
 pass and vice versa) and stamp `hasConflict` onto every pin in the net.
-The resolved `value`/`analogValue` semantics are unchanged — the flag is
+Non-driver pins — including any with a `pull` set — never count toward
+the driver total, so pulls cannot manufacture a conflict. The resolved
+`value`/`analogValue` semantics are unchanged — the flag is
 purely diagnostic, which is why it lives in the engine's `Pin` and not
 as a new `PinValue` variant: components and the `machine` shim need zero
 changes and keep reading `FLOATING`/`null` exactly as before. The worker
@@ -270,6 +315,10 @@ Main thread → worker:
 - `{ type: "removeComponent", componentId }` — delete a placed component;
   the worker removes it (cascading every wire touching its pins) and
   refuses the PicoBoard with an error.
+- `{ type: "setupPin", gpio, mode, pull? }` — pre-configure a board GPIO
+  (`IN`/`OUT` mode, optional `UP`/`DOWN`/`NONE` pull) without running
+  Python. The app's replay path sends one per `topology.pinSetups`
+  entry; same shape as the `machine.Pin` bridge's setup.
 - `{ type: "run", code }` — run MicroPython in Pyodide.
 
 Worker → main thread:
@@ -303,11 +352,66 @@ never moves a placed part.
 
 ### `machine.Pin` semantics and limits
 
-- `machine.Pin(id, machine.Pin.IN|OUT)` maps id → board GPIO
-  (`GPIO0..GPIO28`); `value()` reads (`IN`) or writes (`OUT`) the pin's
-  `PinValue`. Writes go through the bridge to `CircuitHost.writePin` and
-  immediately `tick()` the circuit, so a wired LED lights without the
-  frame loop running.
+- `machine.Pin(id, machine.Pin.IN|OUT, machine.Pin.PULL_UP|PULL_DOWN?)`
+  maps id → board GPIO (`GPIO0..GPIO28`); the optional third argument
+  sets the pin's internal pull (anything omitted/null →
+  no pull). The shim's bridge calls `CircuitHost.setupPin`, which — like
+  the app's own setup-pin replay path — applies mode/pull then calls
+  `Circuit.resolveNow()` so the pull is live immediately, even mid-script
+  under a frozen busy-wait tick loop. `value()` reads (`IN`) or writes
+  (`OUT`) the pin's `PinValue`. Writes go through the bridge to
+  `CircuitHost.writePin` and immediately `tick()` the circuit, so a wired
+  LED lights without the frame loop running.
+
+### The UI render layer (published `@wokwi/elements` + scaled HTML stage)
+
+The `ui` layer renders engine snapshot data, never the engine itself.
+Two structural choices from the wokwi-visuals + pin-layout milestones:
+
+1. **Component bodies are real DOM, wires/pins are an SVG overlay, all
+   under one CSS scale.** The `CircuitCanvas` stage is a fixed 1200×700
+   HTML `div` (`data-testid="circuit-stage"`) scaled by a CSS
+   `transform` measured from a `ResizeObserver` (`300px` wide container
+   → 0.25 scale, so interactive targets stay sanely sized at any window
+   width). Component bodies sit inside it as absolutely-positioned divs
+   (`data-testid="body-<id>"`, `style.left/top` in stage units) — real,
+   hoverable, draggable DOM. Two `<svg>` overlays (`data-layer="wires"`,
+   `data-layer="pins"`, each `pointer-events: none` with `auto` enabled
+   only on individual wire/pin groups) draw the connecting lines and pin
+   markers above the bodies. Both overlays carry the **same `transform:
+   scale()` (with `transform-origin: top-left`) as the stage**, so SVG
+   user coordinates stay in stage units throughout. Each marker sits at
+   its body origin + the element-source pin offset (LED anode
+   `(25,42)` / cathode `(15,42)`; button `1.l(0,13)` / `1.r(67,13)` /
+   `2.l(0,32)` / `2.r(67,32)`; board GPIO0–28 `x = 14 + i*10`, `3V3`
+   at 304, `GND` at 314, `y = BOARD_H - 8 = 112`). A previous version
+   left the overlays unscaled, so every marker and wire endpoint
+   rendered ~`1/scale − 1` away from its body at any zoom — the fix
+   snaps them to sub-pixel agreement (asymptotically asserting in
+   browser-verify step 1b against the real browser, which also proves
+   the overlays track the bodies while dragging). All client→stage
+   coordinate math goes through `clientToStagePoint()`
+   (`getBoundingClientRect`-based), so drop and drag deltas stay correct
+   under any scale.
+2. **LED and button visuals come from the published `@wokwi/elements`.**
+   `wokwi-led` and `wokwi-pushbutton` (MIT) are a normal npm dependency
+   and register themselves via the side-effect `import "@wokwi/elements"`
+   in `main.tsx`. The `LedView`/`ButtonView` components drive them
+   through refs, setting boolean props (`value`, `pressed`) as JS
+   properties (LitElement parses DOM attributes as strings, so
+   attributes can't carry a truthful `false`) and string props (`color`)
+   as attributes via `useEffect`. Both views (and the palette previews)
+   `import type` the classes from `@wokwi/elements` only, so the element
+   runtime never loads inside jsdom tests. A vendoring attempt
+   (`src/vendor/wokwi/`) was evaluated and reverted as unnecessary — the
+   package ships pre-compiled JS (`__decorate` output), so tsconfig
+   settings like `useDefineForClassFields` never execute against it; see
+   `docs/DECISIONS.md`. Pin geometry comes from the elements' `pinInfo`,
+   verified identical between published `1.9.2` and the source clone
+   that informed the offsets. The Pico board has no Wokwi element, so it
+   stays a hand-drawn SVG (`PicoBoardView`), mounted inside a sized
+   `<svg>` wrapper on the stage. See `docs/COMPONENT_GUIDE.md` for the
+   visual representations.
 - `machine.PWM`, `machine.ADC`, `machine.I2C`, and `machine.time` beyond
   `sleep()` are **out of scope for now** — importing them
   raises a normal Python `ImportError`, surfaced to the output panel.

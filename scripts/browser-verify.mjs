@@ -1,20 +1,21 @@
 // Headless-browser integration verification of the whole Pyodide-worker flow —
-// the checks that jsdom cannot do (real Web Worker + Pyodide + real React).
+// the checks that jsdom cannot do (real Web Worker + Pyodide + real React +
+// the @wokwi/elements web components, which need a real Shadow DOM).
 //
 //   Usage:  node scripts/browser-verify.mjs <url> [edgePath]
 //
 // Requires Microsoft Edge (default path below) and Node >= 22 (global WebSocket).
 // Drives the page over the Chrome DevTools Protocol:
-//   1. Canvas renders board/LEDs/button + all five demo wires on load.
+//   1. Canvas renders board/LEDs/button + all six demo wires on load.
 //   2. Press/release of the button lights LED1 via worker relay.
 //   3. Run executes the default script -> LED2 visibly blinks then stays on.
 //   4. Run a while True loop, Stop it -> wiring reappears, button still works.
-//   5. Palette: drop a new LED, wire it, drag it, Stop -> the placed part and
-//      its wire survive the worker replay at the dragged position.
+//   5. Palette: drop a new LED (wire-w7), wire it, drag it, Stop -> the placed
+//      part and its wire survive the worker replay at the dragged position.
 //   6. Delete: select -> Delete button / Delete key / editor-focus guard /
 //      Board exemption; deleted parts never reappear after Stop.
-//   7. Conflict: wiring two OUT pins (board 3V3 <-> GND) flags the affected
-//      wires red/dashed + a conflict banner; unwiring clears both.
+//   7. Conflict: wiring 3V3 <-> GND (wire-w10) flags every wire on the merged
+//      net red/dashed + a conflict banner; unwiring clears both.
 //   8. Non-blocking sleep (JSPI): during a time.sleep() blink script the button
 //      relay still lights LED1 promptly (worker event loop free mid-sleep) and
 //      the script still completes.
@@ -98,15 +99,15 @@ try {
   await send("Page.enable");
   await sleep(1500);
 
-const parseTransform = (t) => {
-  const m = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(t ?? "");
-  return m ? { x: +m[1], y: +m[2] } : null;
-};
-
 const state = () =>
   evaljs(`(async()=>{
       const q = (s) => document.querySelector(s);
       const qa = (s) => [...document.querySelectorAll(s)];
+      const posOf = (id) => {
+        const el = q('[data-testid="'+id+'"]');
+        if (!el) return null;
+        return { x: parseFloat(el.style.left), y: parseFloat(el.style.top) };
+      };
       return {
         wires: qa('[data-testid^="wire-"]').map((el) => el.getAttribute('data-testid')).sort(),
         boards: qa('[data-testid="pico-board"]').length,
@@ -115,13 +116,13 @@ const state = () =>
         pins: qa('[data-testid^="pin-"]').length,
         issue: q('[data-testid="worker-issue"]')?.textContent ?? null,
         paletteItems: qa('[data-testid^="palette-"]').map((el) => el.getAttribute('data-testid')).sort(),
-        placedLed: q('[data-testid="body-placed-1"] > g[data-testid="led"]')?.getAttribute('transform') ?? null,
-        placed2: q('[data-testid="body-placed-2"] > g[data-testid="led"]')?.getAttribute('transform') ?? null,
-        placed3: q('[data-testid="body-placed-3"] > g[data-testid="led"]')?.getAttribute('transform') ?? null,
+        placedLed: posOf('body-placed-1'),
+        placed2: posOf('body-placed-2'),
+        placed3: posOf('body-placed-3'),
         placedBodies: qa('[data-testid^="body-placed-"]').length,
         deleteButton: q('[data-testid="delete-component"]')?.textContent ?? null,
-        wire6: (() => {
-          const g = q('[data-testid="wire-w6"]');
+        wire7: (() => {
+          const g = q('[data-testid="wire-w7"]');
           if (!g) return null;
           const l = g.querySelectorAll('line')[1] ?? g.querySelector('line');
           return l ? { x1: +l.getAttribute('x1'), y1: +l.getAttribute('y1'), x2: +l.getAttribute('x2'), y2: +l.getAttribute('y2') } : null;
@@ -144,10 +145,73 @@ const state = () =>
   assert(s.pressed === "false", "button should start unpressed");
   assert(s.pins >= 10, "pins should render");
   assert(
-    s.wires.join(",") === ["wire-w1", "wire-w2", "wire-w3", "wire-w4", "wire-w5"].join(","),
-    "expected demo wires wire-w1..wire-w5, got " + s.wires
+    s.wires.join(",") === ["wire-w1", "wire-w2", "wire-w3", "wire-w4", "wire-w5", "wire-w6"].join(","),
+    "expected demo wires wire-w1..wire-w6, got " + s.wires
   );
   assert(!s.issue, "unexpected worker issue banner: " + s.issue);
+
+  // ---- 1b. Pin markers sit exactly on their artwork. The stage, wires and
+  //         pins are all scaled by the same CSS transform (coordinates stay
+  //         in stage units), so a marker's rendered center must map back to
+  //         body origin + the element-source pin offset. Before the overlay
+  //         scale was fixed, the markers rendered at unscaled offsets and
+  //         landed ~30% away from every body. Also proves the vendored web
+  //         components upgraded with real shadow-DOM artwork (not bare tags).
+  const geo = await evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const sr = stage.getBoundingClientRect();
+    const scale = sr.width / 1200;
+    const bodyOrigin = (id) => {
+      const r = document.querySelector('[data-testid="body-'+id+'"]').getBoundingClientRect();
+      return { x: (r.left - sr.left) / scale, y: (r.top - sr.top) / scale };
+    };
+    const check = (id, pin, expX, expY) => {
+      const c = document.querySelector('[data-testid="pin-'+id+'-'+pin+'"] circle').getBoundingClientRect();
+      const o = bodyOrigin(id);
+      const got = { x: (c.left + c.width / 2 - sr.left) / scale, y: (c.top + c.height / 2 - sr.top) / scale };
+      return { pin, got, want: { x: o.x + expX, y: o.y + expY }, dx: got.x - (o.x + expX), dy: got.y - (o.y + expY) };
+    };
+    const shadowSvg = (bodyId, tag) => {
+      const el = document.querySelector('[data-testid="' + bodyId + '"] ' + tag);
+      const svg = el?.shadowRoot?.querySelector('svg');
+      if (!svg) return null;
+      const r = svg.getBoundingClientRect();
+      return { w: +(r.width / scale).toFixed(2), h: +(r.height / scale).toFixed(2) };
+    };
+    return {
+      scale,
+      ledSvg: shadowSvg('body-led', 'wokwi-led'),
+      buttonSvg: shadowSvg('body-button', 'wokwi-pushbutton'),
+      checks: [
+        check('led', 'anode', 25, 42),
+        check('led', 'cathode', 15, 42),
+        check('button', 'leg1a', 0, 13),
+        check('button', 'leg1b', 67, 13),
+        check('button', 'leg2a', 0, 32),
+        check('button', 'leg2b', 67, 32),
+        check('board', 'GPIO0', 14, 112),
+        check('board', 'GPIO15', 164, 112),
+        check('board', 'GND', 314, 112),
+      ],
+    };
+  })()`);
+  console.log("step1b pin geometry:", JSON.stringify(geo));
+  assert(geo.scale < 1, "canvas should be scaled down to fit its container, got scale=" + geo.scale);
+  assert(
+    geo.ledSvg && Math.abs(geo.ledSvg.w - 40) < 2 && Math.abs(geo.ledSvg.h - 50) < 2,
+    "wokwi-led must upgrade with its 40x50 shadow svg, got " + JSON.stringify(geo.ledSvg)
+  );
+  assert(
+    geo.buttonSvg && Math.abs(geo.buttonSvg.w - 67.28) < 3 && Math.abs(geo.buttonSvg.h - 45.35) < 3,
+    "wokwi-pushbutton must upgrade with its ~67.28x45.35 shadow svg, got " + JSON.stringify(geo.buttonSvg)
+  );
+  for (const c of geo.checks) {
+    assert(
+      Math.abs(c.dx) < 3 && Math.abs(c.dy) < 3,
+      "pin " + c.pin + " must sit on its artwork at (" + c.want.x.toFixed(1) + "," + c.want.y.toFixed(1) +
+        "), got (" + c.got.x.toFixed(1) + "," + c.got.y.toFixed(1) + ")"
+    );
+  }
 
   // ---- 2. Button press/release drives LED1 through the worker. The worker
   //         warm-loads Pyodide on boot; its WASM init blocks the worker thread
@@ -169,6 +233,17 @@ const state = () =>
   };
   s = await waitFor("press should light LED1", (x) => x.leds[0] === "true" && x.pressed === "true");
   console.log("step2 pressed OK:", JSON.stringify(s));
+  // The vendored (decorator-free) LEDElement must genuinely re-render in the
+  // shadow DOM when `.value` flips — the `.light` glow group shows, then hides.
+  const glowOn = await evaljs(`(()=>{
+    const el = document.querySelector('[data-testid="body-led"] wokwi-led');
+    const g = el?.shadowRoot?.querySelector('.light');
+    return g ? (g.getAttribute('style') || '') : null;
+  })()`);
+  assert(
+    glowOn !== null && !glowOn.includes('none'),
+    "LED shadow glow must be visible while on, got " + JSON.stringify(glowOn)
+  );
 
   await evaljs(
     `(()=>{ document.querySelector('[data-testid="button-body"]')
@@ -179,6 +254,15 @@ const state = () =>
     (x) => x.leds[0] === "false" && x.pressed === "false"
   );
   console.log("step2 released OK:", JSON.stringify(s));
+  const glowOff = await evaljs(`(()=>{
+    const el = document.querySelector('[data-testid="body-led"] wokwi-led');
+    const g = el?.shadowRoot?.querySelector('.light');
+    return g ? (g.getAttribute('style') || '') : null;
+  })()`);
+  assert(
+    glowOff !== null && glowOff.includes('none'),
+    "LED shadow glow must hide when off, got " + JSON.stringify(glowOff)
+  );
 
   // ---- 3. Run the default script: LED2 blinks (0.5s) then stays on ----
   await evaljs(
@@ -224,7 +308,7 @@ const state = () =>
   // actually rebuilt and re-rendered the wiring.
   recovered = await waitFor(
     "Stop should restore a freshly rebuilt wiring with LED2 off",
-    (x) => x.boards === 1 && x.wires.length === 5 && x.leds[1] === "false"
+    (x) => x.boards === 1 && x.wires.length === 6 && x.leds[1] === "false"
   );
   console.log("step4 after stop:", JSON.stringify(recovered));
   assert(!recovered.issue, "unexpected issue banner after Stop: " + recovered.issue);
@@ -251,28 +335,29 @@ const state = () =>
     "palette must not offer a second board"
   );
 
-  // Convert a desired SVG point into client coords so the app's own screen->SVG
-  // inverse maps the drop back to (900,200).
+  // Convert a desired stage point into client coords so the app's own
+  // client->stage inverse maps the drop back to (900,200) at any canvas scale.
   await evaljs(`(()=>{
-    const svg = document.querySelector('[data-testid="circuit-canvas"]');
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const r = stage.getBoundingClientRect();
+    const toClient = (x, y) => ({ x: r.left + x * (r.width / 1200), y: r.top + y * (r.height / 700) });
     const dt = new DataTransfer();
     dt.setData('application/x-pico-component', 'led');
-    const p = svg.createSVGPoint(); p.x = 900; p.y = 200;
-    const c = p.matrixTransform(svg.getScreenCTM());
-    svg.dispatchEvent(new DragEvent('drop', {
-      bubbles: true, cancelable: true, clientX: c.x, clientY: c.y, dataTransfer: dt,
-    }));
+    const c = toClient(900, 200);
+    document.querySelector('[data-testid="circuit-canvas"]')
+      .dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: c.x, clientY: c.y, dataTransfer: dt }));
     return true;
   })()`);
   s = await waitFor(
     "dropped palette LED should render as placed-1",
-    (x) => x.placedLed !== null && x.placedLed.includes("translate")
+    (x) => x.placedLed !== null
   );
   console.log("step5 placed:", JSON.stringify(s));
-  let placedPos = parseTransform(s.placedLed);
   assert(
-    placedPos && Math.abs(placedPos.x - 900) < 5 && Math.abs(placedPos.y - 200) < 5,
-    "placed LED should land near the drop point, got " + s.placedLed
+    s.placedLed &&
+      Math.abs(s.placedLed.x - 900) < 5 &&
+      Math.abs(s.placedLed.y - 200) < 5,
+    "placed LED should land near the drop point, got " + JSON.stringify(s.placedLed)
   );
 
   // Wire the placed LED to a free board pin through the usual pin-click flow.
@@ -282,43 +367,43 @@ const state = () =>
   await sleep(100);
   await evaljs(`(()=>{ const e = document.querySelector('[data-testid="pin-board-GPIO17"]'); e.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
   s = await waitFor(
-    "placed LED should be wired as wire-w6",
-    (x) => x.wires.includes("wire-w6")
+    "placed LED should be wired as wire-w7",
+    (x) => x.wires.includes("wire-w7")
   );
-  const wire6Before = s.wire6;
-  assert(wire6Before, "wire-w6 should have renderable endpoints");
+  const wireBefore = s.wire7;
+  assert(wireBefore, "wire-w7 should have renderable endpoints");
 
-  // Drag the placed LED's body 150 units right and down; the wire endpoints
-  // must follow. The handler adds raw client deltas to the SVG-space start
-  // position, so the new transform is exactly start + client delta.
+  // Drag the placed LED's body 150 stage-units right and down; the wire
+  // endpoints must follow. The app converts each client delta back into stage
+  // units through the stage rect, so the movement is exactly 150 stage units
+  // regardless of the container-scale transform.
   const drag = await evaljs(`(()=>{
-    const svg = document.querySelector('[data-testid="circuit-canvas"]');
-    const body = document.querySelector('[data-testid="body-placed-1"]');
-    const toClient = (x, y) => { const p = svg.createSVGPoint(); p.x = x; p.y = y; const c = p.matrixTransform(svg.getScreenCTM()); return { x: c.x, y: c.y }; };
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const container = document.querySelector('[data-testid="circuit-canvas"]');
+    const r = stage.getBoundingClientRect();
+    const k = r.width / 1200;
+    const toClient = (x, y) => ({ x: r.left + x * k, y: r.top + y * k });
     const a = toClient(900, 200);
     const b = toClient(1050, 350);
-    body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: a.x, clientY: a.y, button: 0, pointerId: 7, pointerType: 'mouse', pointercancel: true }));
-    svg.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: b.x, clientY: b.y, pointerId: 7, button: 0 }));
-    svg.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, clientX: b.x, clientY: b.y, pointerId: 7, button: 0 }));
-    return { dx: b.x - a.x, dy: b.y - a.y };
+    const body = document.querySelector('[data-testid="body-placed-1"]');
+    body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: a.x, clientY: a.y, button: 0, pointerId: 7, pointerType: 'mouse' }));
+    container.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: b.x, clientY: b.y, pointerId: 7, button: 0 }));
+    container.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, clientX: b.x, clientY: b.y, pointerId: 7, button: 0 }));
+    return { dx: (b.x - a.x) / k, dy: (b.y - a.y) / k, k };
   })()`);
   s = await waitFor(
     "placed LED should end at the dragged position",
-    (x) => {
-      const p = parseTransform(x.placedLed);
-      return (
-        p &&
-        Math.abs(p.x - (900 + drag.dx)) < 3 &&
-        Math.abs(p.y - (200 + drag.dy)) < 3
-      );
-    }
+    (x) =>
+      x.placedLed !== null &&
+      Math.abs(x.placedLed.x - (900 + drag.dx)) < 3 &&
+      Math.abs(x.placedLed.y - (200 + drag.dy)) < 3
   );
   console.log("step5 dragged:", JSON.stringify(s));
   assert(
-    s.wire6 &&
-      Math.abs(s.wire6.x1 - wire6Before.x1 - drag.dx) < 3 &&
-      Math.abs(s.wire6.y1 - wire6Before.y1 - drag.dy) < 3,
-    "wire-w6 endpoint should follow the dragged LED"
+    s.wire7 &&
+      Math.abs(s.wire7.x1 - wireBefore.x1 - drag.dx) < 3 &&
+      Math.abs(s.wire7.y1 - wireBefore.y1 - drag.dy) < 3,
+    "wire-w7 endpoint should follow the dragged LED"
   );
 
   // Stop must replay the whole topology into a fresh worker — including the
@@ -329,17 +414,13 @@ const state = () =>
   );
   s = await waitFor(
     "placed LED + its wire should survive Stop",
-    (x) => {
-      const p = parseTransform(x.placedLed);
-      return (
-        x.boards === 1 &&
-        x.wires.includes("wire-w6") &&
-        x.wires.length >= 6 &&
-        p !== null &&
-        Math.abs(p.x - (900 + drag.dx)) < 3 &&
-        Math.abs(p.y - (200 + drag.dy)) < 3
-      );
-    }
+    (x) =>
+      x.boards === 1 &&
+      x.wires.includes("wire-w7") &&
+      x.wires.length >= 6 &&
+      x.placedLed !== null &&
+      Math.abs(x.placedLed.x - (900 + drag.dx)) < 3 &&
+      Math.abs(x.placedLed.y - (200 + drag.dy)) < 3
   );
   console.log("step5 after stop:", JSON.stringify(s));
   assert(!s.issue, "unexpected issue banner after palette Stop: " + s.issue);
@@ -384,18 +465,19 @@ const state = () =>
   await evaljs(`(()=>{ document.querySelector('[data-testid="delete-component"]').click(); return true; })()`);
   s = await waitFor(
     "Delete button should remove placed-1 and wire-w6",
-    (x) => x.placedLed === null && !x.wires.includes("wire-w6") && x.placedBodies === 0
+    (x) => x.placedLed === null && !x.wires.includes("wire-w7") && x.placedBodies === 0
   );
   assert(s.pins >= 36, "pins should drop back to the demo count after deletion, got " + s.pins);
   console.log("step6b deleted via button:", JSON.stringify(s));
 
-  const dropLedAt = (svgX, svgY) => evaljs(`(()=>{
-    const svg = document.querySelector('[data-testid="circuit-canvas"]');
+  const dropLedAt = (stageX, stageY) => evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const r = stage.getBoundingClientRect();
+    const c = { x: r.left + ${stageX} * (r.width / 1200), y: r.top + ${stageY} * (r.height / 700) };
     const dt = new DataTransfer();
     dt.setData('application/x-pico-component', 'led');
-    const p = svg.createSVGPoint(); p.x = ${svgX}; p.y = ${svgY};
-    const c = p.matrixTransform(svg.getScreenCTM());
-    svg.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: c.x, clientY: c.y, dataTransfer: dt }));
+    document.querySelector('[data-testid="circuit-canvas"]')
+      .dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: c.x, clientY: c.y, dataTransfer: dt }));
     return true;
   })()`);
 
@@ -405,13 +487,13 @@ const state = () =>
   await evaljs(`(()=>{ document.querySelector('[data-testid="pin-placed-2-anode"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
   await sleep(100);
   await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-GPIO18"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
-  s = await waitFor("placed-2 should be wired as wire-w7", (x) => x.wires.includes("wire-w7"));
+  s = await waitFor("placed-2 should be wired as wire-w8", (x) => x.wires.includes("wire-w8"));
   await select('body-placed-2');
   s = await waitFor("selecting placed-2 should reveal the Delete button", (x) => x.deleteButton !== null);
   await evaljs(`(()=>{ window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true })); return true; })()`);
   s = await waitFor(
-    "Delete key should remove placed-2 and wire-w7",
-    (x) => x.placed2 === null && !x.wires.includes("wire-w7")
+    "Delete key should remove placed-2 and wire-w8",
+    (x) => x.placed2 === null && !x.wires.includes("wire-w8")
   );
   console.log("step6c deleted via key:", JSON.stringify(s));
 
@@ -422,7 +504,7 @@ const state = () =>
   await evaljs(`(()=>{ document.querySelector('[data-testid="pin-placed-3-anode"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
   await sleep(100);
   await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-GPIO19"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
-  s = await waitFor("placed-3 should be wired as wire-w8", (x) => x.wires.includes("wire-w8"));
+  s = await waitFor("placed-3 should be wired as wire-w9", (x) => x.wires.includes("wire-w9"));
   await select('body-placed-3');
   s = await waitFor("selecting placed-3 should reveal the Delete button", (x) => x.deleteButton !== null);
   await evaljs(`(()=>{
@@ -433,13 +515,13 @@ const state = () =>
   await sleep(400);
   s = await state();
   assert(s.placed3 !== null, "Backspace in the editor must NOT delete the selected component");
-  assert(s.wires.includes("wire-w8"), "wire-w8 must survive editor Backspace");
+  assert(s.wires.includes("wire-w9"), "wire-w9 must survive editor Backspace");
   assert(s.deleteButton !== null, "selection must survive editor Backspace");
   await evaljs(`(()=>{ document.activeElement?.blur?.(); return true; })()`);
   await evaljs(`(()=>{ window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true })); return true; })()`);
   s = await waitFor(
-    "Backspace on the body should remove placed-3 and wire-w8",
-    (x) => x.placed3 === null && !x.wires.includes("wire-w8")
+    "Backspace on the body should remove placed-3 and wire-w9",
+    (x) => x.placed3 === null && !x.wires.includes("wire-w9")
   );
   console.log("step6d editor guard + backspace delete:", JSON.stringify(s));
 
@@ -452,7 +534,7 @@ const state = () =>
     "deleted parts must not return after Stop",
     (x) =>
       x.boards === 1 &&
-      x.wires.length === 5 &&
+      x.wires.length === 6 &&
       x.wires.every((w) => w.includes("wire-w")) &&
       x.placedLed === null &&
       x.placed2 === null &&
@@ -465,44 +547,52 @@ const state = () =>
   // ---- 7. Conflict detection: two OUT pins wired together flag the affected
   //         wires (red, dashed) and show a warning banner; unwiring clears
   //         both. board.3V3 (OUT HIGH) <-> board.GND (OUT LOW) needs no Python
-  //         to be a genuine two-driver short-circuit.
+  //         to be a genuine two-driver short-circuit. The new short is w10:
+  //         the six demo wires (w1-w6) plus w7/w8/w9 from steps 5/6 fill the
+  //         earlier ids.
   await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-3V3"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
   await sleep(100);
   await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-GND"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
   s = await waitFor(
     "wiring 3V3 to GND should flag conflicted wires and show the banner",
     (x) =>
-      x.wires.includes("wire-w9") &&
+      x.wires.includes("wire-w10") &&
       x.conflictBanner !== null &&
       x.conflictedWires.length > 0
   );
+  // The short merges the 3V3 net (w1, and the short w10) with the GND net
+  // (w4, w6, and the short w10) — the button is unpressed, so its two strips
+  // are not bridged (leg1b/leg2b carry no wires) and GPIO15's pull-down net
+  // stays separate. Reporting order is graphic (top-to-bottom), not id order,
+  // so compare as sets.
   assert(
-    s.conflictedWires.join(",") === ["wire-w3", "wire-w5", "wire-w9"].join(","),
-    "expected wires w3/w5/w9 on the shorted net to be flagged, got " + s.conflictedWires
+    [...s.conflictedWires].sort().join(",") ===
+      ["wire-w1", "wire-w4", "wire-w6", "wire-w10"].sort().join(","),
+    "expected wires w1/w4/w6/w10 on the shorted net to be flagged, got " + s.conflictedWires
   );
   assert(
-    s.conflictBanner.includes("3 wire conflicts"),
-    "expected the banner to count 3 conflicted wires, got " + s.conflictBanner
+    s.conflictBanner.includes("4 wire conflicts"),
+    "expected the banner to count 4 conflicted wires, got " + s.conflictBanner
   );
   console.log("step7 conflicted:", JSON.stringify(s));
 
   // The conflicted wire is visibly a warning (red + dashed), unlike normal wires.
-  const w9Style = await evaljs(`(()=>{
-    const g = document.querySelector('[data-testid="wire-w9"]');
+  const w10Style = await evaljs(`(()=>{
+    const g = document.querySelector('[data-testid="wire-w10"]');
     const l = g?.querySelectorAll('line')[1];
     return l ? { stroke: l.getAttribute('stroke'), dash: l.getAttribute('stroke-dasharray') } : null;
   })()`);
   assert(
-    w9Style && w9Style.stroke === "#d81b1b" && w9Style.dash === "8 5",
-    "conflicted wire should be red/dashed, got " + JSON.stringify(w9Style)
+    w10Style && w10Style.stroke === "#d81b1b" && w10Style.dash === "8 5",
+    "conflicted wire should be red/dashed, got " + JSON.stringify(w10Style)
   );
 
   // Remove the short by clicking the conflicted wire: conflict resolves, the
   // banner disappears and every wire returns to its normal style.
-  await evaljs(`(()=>{ document.querySelector('[data-testid="wire-w9"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
+  await evaljs(`(()=>{ document.querySelector('[data-testid="wire-w10"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
   s = await waitFor(
     "removing the short should clear the banner and restore the wires",
-    (x) => !x.wires.includes("wire-w9") && x.conflictBanner === null && x.conflictedWires.length === 0
+    (x) => !x.wires.includes("wire-w10") && x.conflictBanner === null && x.conflictedWires.length === 0
   );
   console.log("step7 disconnect clears:", JSON.stringify(s));
 

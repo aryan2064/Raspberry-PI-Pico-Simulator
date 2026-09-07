@@ -1,4 +1,5 @@
 import type { RenderInfo } from "../engine";
+import type { PinMode, PinPull } from "../engine";
 
 // The only things that cross the worker boundary are structured-clone-able
 // messages — never JS object references. Every message shape in both
@@ -23,6 +24,7 @@ export type MainToWorkerMessage =
   | DisconnectMessage
   | PressReleaseMessage
   | RemoveComponentMessage
+  | SetupPinMessage
   | RunMessage;
 
 export interface AddComponentMessage {
@@ -56,6 +58,19 @@ export interface RemoveComponentMessage {
 export type PressReleaseMessage =
   | { type: "press"; componentId: string }
   | { type: "release"; componentId: string };
+
+// Pre-configures a board GPIO the way machine.Pin(id, mode, pull) would,
+// WITHOUT running any Python. The app uses this in its initial topology
+// setup / replay to configure demo pins (e.g. GPIO15 as IN with an internal
+// pull-down so the button circuit reads LOW at rest). mode is the engine's
+// vocabulary (not the numeric machine.Pin constants); pull is the engine's
+// PinPull ("NONE" when omitted).
+export interface SetupPinMessage {
+  type: "setupPin";
+  gpio: number;
+  mode: PinMode;
+  pull?: PinPull;
+}
 
 export interface RunMessage {
   type: "run";
@@ -131,4 +146,8 @@ export interface TopologyConnection {
 export interface Topology {
   components: TopologyComponent[];
   connections: TopologyConnection[];
+  // Optional pin pre-configurations replayed alongside components/connections
+  // (e.g. the demo's GPIO15 IN + pull-down). Same shape as the setupPin
+  // message; the spawn/replay path posts them in order after the wires.
+  pinSetups?: SetupPinMessage[];
 }

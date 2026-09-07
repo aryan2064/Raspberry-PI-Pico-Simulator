@@ -31,40 +31,41 @@ const WIRE_CONFLICT_COLOR = "#d81b1b";
 const WIRE_CONFLICT_HOVER_COLOR = "#a40000";
 const WIRE_HIT_WIDTH = 14;
 
-// A pointer-down only becomes a drag once it travels beyond this many screen
+// A pointer-down only becomes a drag once it travels beyond this many stage
 // pixels, so a plain click (e.g. pressing the button) doesn't nudge anything.
 const DRAG_THRESHOLD = 4;
 
-// Converts a drop's client/screen coordinates into the SVG's own coordinate
-// space so a placed component lands where the user dropped it even when the
-// SVG is scaled/offset within the page. getScreenCTM() is the standard
-// inverse-transform approach; the fallback keeps the renderer robust in
-// environments with no usable screen transform (e.g. jsdom tests).
-function screenToSvgPoint(
-  svg: SVGSVGElement | null,
+// The stage is a fixed 1:1 coordinate space; the container scales it to fit
+// its (flex-bounded) width with a CSS transform. The wire/pin SVG overlays
+// carry the SAME scale transform (with coordinates kept in stage units), so
+// pin markers and wire endpoints stay glued to the scaled bodies. All
+// interaction handlers convert client coords to stage coords through the
+// stage's bounding rect, so drags/drops behave correctly at any scale. The
+// jsdom fallback (zero rect) passes client coords straight through.
+const STAGE_W = 1200;
+const STAGE_H = 700;
+
+// The PicoBoard view is still a hand-drawn SVG (no wokwi board element
+// exists); it is hosted in its own svg wrapper sized to its intrinsic dims.
+const PICO_BOARD_W = 320;
+const PICO_BOARD_H = 120;
+
+function clientToStagePoint(
+  stage: HTMLElement | null,
   clientX: number,
   clientY: number
 ): Vec {
-  if (svg && typeof svg.getScreenCTM === "function") {
-    try {
-      const ctm = svg.getScreenCTM();
-      if (ctm) {
-        const point = svg.createSVGPoint();
-        point.x = clientX;
-        point.y = clientY;
-        const mapped = point.matrixTransform(ctm.inverse());
-        if (Number.isFinite(mapped.x) && Number.isFinite(mapped.y)) {
-          return { x: mapped.x, y: mapped.y };
-        }
-      }
-    } catch {
-      // degenerate/singular matrix — fall through to the pass-through below
-    }
+  const rect = stage?.getBoundingClientRect();
+  if (rect && rect.width > 0 && rect.height > 0) {
+    return {
+      x: (clientX - rect.left) * (STAGE_W / rect.width),
+      y: (clientY - rect.top) * (STAGE_H / rect.height),
+    };
   }
   return { x: clientX, y: clientY };
 }
 
-// Screen position of a pin = its owning component's canvas position + the
+// Stage position of a pin = its owning component's canvas position + the
 // pin's offset for that component type. This canvas renders from snapshots
 // (no engine objects), so pin positions come from the id-keyed positions map.
 function pinScreenPos(
@@ -81,22 +82,18 @@ function pinScreenPos(
 function renderComponentView(
   componentId: string,
   renderInfo: RenderInfo,
-  position: Vec,
   onPress: (componentId: string) => void,
   onRelease: (componentId: string) => void,
   selected: boolean
 ): ReactNode {
   switch (renderInfo.type) {
     case "led":
-      return (
-        <LedView key={componentId} renderInfo={renderInfo} position={position} selected={selected} />
-      );
+      return <LedView key={componentId} renderInfo={renderInfo} selected={selected} />;
     case "button":
       return (
         <ButtonView
           key={componentId}
           renderInfo={renderInfo}
-          position={position}
           selected={selected}
           onPress={() => onPress(componentId)}
           onRelease={() => onRelease(componentId)}
@@ -104,12 +101,14 @@ function renderComponentView(
       );
     case "pico_board":
       return (
-        <PicoBoardView
+        <svg
           key={componentId}
-          renderInfo={renderInfo}
-          position={position}
-          selected={selected}
-        />
+          width={PICO_BOARD_W}
+          height={PICO_BOARD_H}
+          style={{ display: "block" }}
+        >
+          <PicoBoardView renderInfo={renderInfo} position={{ x: 0, y: 0 }} selected={selected} />
+        </svg>
       );
     default: {
       const exhaustive: never = renderInfo;
@@ -161,6 +160,10 @@ export function CircuitCanvas({
   const [draggingOver, setDraggingOver] = useState(false);
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
 
+  // How much the fixed 1200x700 stage is scaled to fit its container width
+  // (1 in jsdom, where there is no layout/ResizeObserver at all).
+  const [scale, setScale] = useState(1);
+
   // The selected id, mirrored into a ref so the window keydown listener (which
   // is attached once) always sees the latest selection.
   const selectedIdRef = useRef<string | null>(null);
@@ -169,17 +172,31 @@ export function CircuitCanvas({
     setSelectedComponentId(id);
   }
 
-  const svgRef = useRef<SVGSVGElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
 
   // In-progress body drag. Pointer-down records a candidate; nothing moves
   // until the pointer travels past DRAG_THRESHOLD, so button presses and pin
   // clicks keep working untouched.
   const dragRef = useRef<{
     componentId: string;
-    startClient: Vec;
+    startStage: Vec;
     startPosition: Vec;
     moved: boolean;
   } | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return undefined;
+    const update = () => {
+      const w = container.clientWidth;
+      if (w > 0) setScale(w / STAGE_W);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, []);
 
   const infoByComponent = useMemo(
     () => new Map(snapshot.components.map((c) => [c.id, c.renderInfo])),
@@ -249,17 +266,18 @@ export function CircuitCanvas({
     if (e.button !== 0) return; // primary button only
     dragRef.current = {
       componentId,
-      startClient: { x: e.clientX, y: e.clientY },
+      startStage: clientToStagePoint(stageRef.current, e.clientX, e.clientY),
       startPosition: positions[componentId] ?? { x: 0, y: 0 },
       moved: false,
     };
   }
 
-  function handleSvgPointerMove(e: React.PointerEvent) {
+  function handleContainerPointerMove(e: React.PointerEvent) {
     const drag = dragRef.current;
     if (!drag) return;
-    const dx = e.clientX - drag.startClient.x;
-    const dy = e.clientY - drag.startClient.y;
+    const current = clientToStagePoint(stageRef.current, e.clientX, e.clientY);
+    const dx = current.x - drag.startStage.x;
+    const dy = current.y - drag.startStage.y;
     if (!drag.moved) {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
       drag.moved = true;
@@ -269,7 +287,7 @@ export function CircuitCanvas({
       if (infoByComponent.get(drag.componentId)?.type === "button") {
         onRelease(drag.componentId);
       }
-      // Capture the pointer so moves outside the SVG still track.
+      // Capture the pointer so moves outside the canvas still track.
       if (typeof e.currentTarget.setPointerCapture === "function") {
         try {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -284,16 +302,17 @@ export function CircuitCanvas({
     });
   }
 
-  function handleSvgPointerUp(e: React.PointerEvent) {
+  function handleContainerPointerUp(e: React.PointerEvent) {
     const drag = dragRef.current;
     if (!drag) return;
     dragRef.current = null;
     if (drag.moved) {
       // Commit exactly where the pointer landed (in case no move event existed
       // for the final lift).
+      const current = clientToStagePoint(stageRef.current, e.clientX, e.clientY);
       onMoveComponent(drag.componentId, {
-        x: drag.startPosition.x + (e.clientX - drag.startClient.x),
-        y: drag.startPosition.y + (e.clientY - drag.startClient.y),
+        x: drag.startPosition.x + (current.x - drag.startStage.x),
+        y: drag.startPosition.y + (current.y - drag.startStage.y),
       });
       if (typeof e.currentTarget.releasePointerCapture === "function") {
         try {
@@ -310,18 +329,18 @@ export function CircuitCanvas({
     }
   }
 
-  function handleSvgPointerCancel() {
+  function handleContainerPointerCancel() {
     dragRef.current = null;
   }
 
   // ---- drop (native HTML5 drag-and-drop from the palette) ----
 
-  function handleDrop(e: React.DragEvent<SVGSVGElement>) {
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setDraggingOver(false);
     const kind = e.dataTransfer?.getData(COMPONENT_MIME) as ComponentKind | "";
     if (kind !== "led" && kind !== "button") return; // not a palette drop
-    onPlaceComponent(screenToSvgPoint(svgRef.current, e.clientX, e.clientY), kind);
+    onPlaceComponent(clientToStagePoint(stageRef.current, e.clientX, e.clientY), kind);
   }
 
   // The single shared delete trigger used by both the visible Delete button
@@ -374,60 +393,93 @@ export function CircuitCanvas({
   const pendingPinId = pendingPin ? `${pendingPin.componentId}:${pendingPin.pinLabel}` : null;
 
   return (
-    <div style={{ position: "relative" }}>
-      <svg
-        ref={svgRef}
-        width="100%"
-        height="720"
-        viewBox="0 0 1200 700"
-        data-testid="circuit-canvas"
+    <div
+      ref={containerRef}
+      data-testid="circuit-canvas"
+      style={{
+        position: "relative",
+        background: "#f7f7f9",
+        border: draggingOver ? "2px dashed #1f8aff" : "1px solid #d0d0d4",
+        borderRadius: 4,
+        overflow: "hidden",
+        height: STAGE_H * scale,
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDraggingOver(true);
+      }}
+      onDragEnter={() => setDraggingOver(true)}
+      onDragLeave={() => setDraggingOver(false)}
+      onDrop={handleDrop}
+      onClick={(e) => {
+        // A click landing on the bare canvas (container or stage, not on a
+        // body/pin/wire) clears the selection. Overlays are pointer-events:none
+        // so empty-canvas clicks resolve their target to the stage/container.
+        if (e.target === containerRef.current || e.target === stageRef.current) {
+          updateSelection(null);
+        }
+      }}
+      onPointerMove={handleContainerPointerMove}
+      onPointerUp={handleContainerPointerUp}
+      onPointerCancel={handleContainerPointerCancel}
+    >
+      {/* LAYER 1 — component bodies. HTML absolutely-positioned at stage
+           coords, so each view can render a real web component (<wokwi-led>,
+           <wokwi-pushbutton>) or an SVG (board). The wrapper div carries the
+           drag-to-move handlers (body-only: pin circles live in layer 3). */}
+      <div
+        ref={stageRef}
+        data-testid="circuit-stage"
+        data-layer="bodies"
         style={{
-          background: "#f7f7f9",
-          border: draggingOver ? "2px dashed #1f8aff" : "1px solid #d0d0d4",
-          borderRadius: 4,
-          display: "block",
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: STAGE_W,
+          height: STAGE_H,
+          transformOrigin: "top left",
+          transform: scale !== 1 ? `scale(${scale})` : undefined,
         }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDraggingOver(true);
-        }}
-        onDragEnter={() => setDraggingOver(true)}
-        onDragLeave={() => setDraggingOver(false)}
-        onDrop={handleDrop}
-        onClick={(e) => {
-          // A click landing on the bare canvas (not on a body/pin/wire, whose
-          // click targets are their own elements) clears the selection.
-          if (e.target === svgRef.current) updateSelection(null);
-        }}
-        onPointerMove={handleSvgPointerMove}
-        onPointerUp={handleSvgPointerUp}
-        onPointerCancel={handleSvgPointerCancel}
       >
-      {/* LAYER 1 — component bodies. Drawn first; wires go on top. The
-          wrapper <g> carries the drag-to-move handlers (body-only: pin
-          circles live in layer 3). */}
-      <g data-layer="bodies">
         {snapshot.components.map((c) => (
-          <g
+          <div
             key={c.id}
             data-testid={`body-${c.id}`}
             onPointerDown={(e) => handleBodyPointerDown(e, c.id)}
-            style={{ cursor: "move" }}
+            style={{
+              position: "absolute",
+              left: positions[c.id]?.x ?? 0,
+              top: positions[c.id]?.y ?? 0,
+              cursor: "move",
+            }}
           >
             {renderComponentView(
               c.id,
               c.renderInfo,
-              positions[c.id] ?? { x: 0, y: 0 },
               onPress,
               onRelease,
               selectedComponentId === c.id
             )}
-          </g>
+          </div>
         ))}
-      </g>
+      </div>
 
-      {/* LAYER 2 — wires. Above every body, below pin markers. */}
-      <g data-layer="wires">
+      {/* LAYER 2 — wires. SVG overlay above every body, below pin markers.
+           The <svg> is pointer-events:none so clicks pass through to the
+           stage; only each wire group opts back in. */}
+      <svg
+        data-layer="wires"
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: STAGE_W,
+          height: STAGE_H,
+          pointerEvents: "none",
+          transformOrigin: "top left",
+          transform: scale !== 1 ? `scale(${scale})` : undefined,
+        }}
+      >
         {connections.map((conn) => {
           const kindA = infoByComponent.get(conn.from.componentId)?.type;
           const kindB = infoByComponent.get(conn.to.componentId)?.type;
@@ -446,7 +498,7 @@ export function CircuitCanvas({
               onClick={() => handleWireClick(conn.wireId)}
               onMouseEnter={() => setHoveredWireId(conn.wireId)}
               onMouseLeave={() => setHoveredWireId(null)}
-              style={{ cursor: "pointer" }}
+              style={{ cursor: "pointer", pointerEvents: "auto" }}
               data-testid={`wire-${conn.wireId}`}
               data-conflicted={conflicted ? "true" : undefined}
             >
@@ -458,6 +510,7 @@ export function CircuitCanvas({
                 y2={b.y}
                 stroke="transparent"
                 strokeWidth={WIRE_HIT_WIDTH}
+                pointerEvents="auto"
               />
               <line
                 x1={a.x}
@@ -481,11 +534,24 @@ export function CircuitCanvas({
             </g>
           );
         })}
-      </g>
+      </svg>
 
       {/* LAYER 3 — pin markers. On top of everything. Pin labels come from the
-          offset maps (pin objects live in the worker, never here). */}
-      <g data-layer="pins">
+           offset maps (pin objects live in the worker, never here). Same
+           pointer-events strategy as the wires overlay. */}
+      <svg
+        data-layer="pins"
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: STAGE_W,
+          height: STAGE_H,
+          pointerEvents: "none",
+          transformOrigin: "top left",
+          transform: scale !== 1 ? `scale(${scale})` : undefined,
+        }}
+      >
         {snapshot.components.flatMap((c) => {
           const offsets = PIN_OFFSETS[c.renderInfo.type];
           const style = PIN_STYLE[c.renderInfo.type];
@@ -497,7 +563,7 @@ export function CircuitCanvas({
                 key={`${c.id}:${label}`}
                 transform={`translate(${pos.x} ${pos.y})`}
                 onClick={() => handlePinClick({ componentId: c.id, pinLabel: label })}
-                style={{ cursor: "pointer" }}
+                style={{ cursor: "pointer", pointerEvents: "auto" }}
                 data-testid={`pin-${c.id}-${label}`}
               >
                 <circle
@@ -511,8 +577,8 @@ export function CircuitCanvas({
             );
           });
         })}
-      </g>
       </svg>
+
       {conflictedWireCount > 0 && (
         <div
           role="status"

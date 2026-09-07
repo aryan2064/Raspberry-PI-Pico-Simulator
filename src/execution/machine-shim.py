@@ -20,10 +20,16 @@ class _PinMode:
 class Pin:
     IN = _PinMode(0, "IN")
     OUT = _PinMode(1, "OUT")
+    PULL_UP = _PinMode(2, "PULL_UP")
+    PULL_DOWN = _PinMode(3, "PULL_DOWN")
 
-    def __init__(self, pin_number, mode=IN):
+    def __init__(self, pin_number, mode=IN, pull=None):
         self._pin = int(pin_number)
-        _bridge.setup(self._pin, mode._value)
+        _bridge.setup(
+            self._pin,
+            mode._value,
+            None if pull is None else pull._value,
+        )
 
     def value(self, value=None):
         if value is None:

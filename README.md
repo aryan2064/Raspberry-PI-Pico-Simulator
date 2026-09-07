@@ -22,16 +22,15 @@ a Web Worker**.
 | Engine data model (`Pin`, `Wire`, `Component`, `Circuit`, `PicoBoard`, `LED`, `Button`) | ✅ Built, split into `src/engine/`, unit-tested |
 | Net resolution via union-find + `tick(dt)` simulation step | ✅ Built & tested |
 | Analog channel (`Pin.analogValue`, 0–1 PWM duty) + analog propagation in `tick()` | ✅ Built & tested (digital behavior untouched) |
-| `Button` (drives nets HIGH/LOW via `press()`/`release()`; exercises the driver side of net resolution) | ✅ Built & tested |
-| Unit tests (Vitest) | ✅ 35 passing (13 engine / 12 canvas-jsdom / 6 worker-message / 4 App-level), plus 1 real-Pyodide integration test |
+| Pin pulls (`Pin.pull`: UP/DOWN/NONE net fallback) + passive `Button` (4 legs, permanent strip pairs + press bridge via `getInternalConnections()`) | ✅ Built & tested |
+| Unit tests (Vitest) | ✅ 74 passing (18 Circuit / 4 analog / 6 button / 14 CircuitHost / 23 canvas-jsdom / 9 App-level), plus 1 real-Pyodide integration test |
 | Vite + React + TypeScript scaffold | ✅ Builds & runs |
-| Canvas rendering (SVG snapshot renderer; click-to-wire, click-to-delete-wire) | ✅ Built & tested |
-| Component palette + drag-to-place/drag-to-move (LED, Button) | ✅ Built & tested (survives Stop/replay; deleting parts is the next task) |
+| `@wokwi/elements` visuals (LED, button) + scaled HTML-stage canvas (pin markers aligned to element `pinInfo`) | ✅ Built & verified in-browser |
+| Canvas rendering (snapshot renderer; click-to-wire, click-to-delete-wire) | ✅ Built & tested |
+| Component palette + drag-to-place/drag-to-move (LED, Button) + deleting placed parts | ✅ Built & tested (survives Stop/replay) |
 | Pyodide in a Web Worker + `machine.Pin` shim (worker owns the live `Circuit`) | ✅ Built & verified (incl. real-Pyodide script driving a wired LED on/off) |
-| Validation/error states (short-circuit conflicts, etc.) | ⬜ Planned |
-| Component library beyond `LED` | ◐ Extends via `Button` (built for a stated, concrete reason) |
-
-Note: `Button` was built to exercise the driver side of net resolution ahead of canvas work, which will need a user-interactive input component.
+| Validation/error states (short-circuit conflicts: red dashed wires + banner) | ✅ Conflict detection built (diagnostic `hasConflict` flag) |
+| Component library beyond `LED` | ◐ LED + Button only (more added only when a feature needs one) |
 
 ## Quick start
 
@@ -55,33 +54,36 @@ npm run verify:python # OPTIONAL: real-Pyodide end-to-end check in Node
 
 The engine test suites run in plain Node — no browser needed. This is
 intentional: the engine layer must stay testable without any
-DOM/React/Pyodide, per `docs/ARCHITECTURE.md`. Three engine suites:
-`Circuit.test.ts` (digital net resolution, 6 tests incl.
-`disconnect()`), `Analog.test.ts` (analog `analogValue` channel:
+DOM/React/Pyodide, per `docs/ARCHITECTURE.md`. Four engine suites:
+`Circuit.test.ts` (digital net resolution, wire edits, conflict + pull
+fallback semantics), `Analog.test.ts` (analog `analogValue` channel:
 single-driver propagation, no-driver → `null`, multi-driver placeholder,
-channel independence, 4 tests) and `Button.test.ts` (drives HIGH while
-pressed / LOW after release, `getRenderInfo()` reflects `isPressed`,
-3 tests). 13 total.
+channel independence), `Button.test.ts` (passive switch with 4 legs — two permanent strip
+pairs `leg1a`/`leg1b` + `leg2a`/`leg2b`, press adds `leg1a`–`leg2a`;
+pull-down keeps the undriven net LOW, no conflict from pulls), and the PicoBoard-pin tests inside `Circuit.test.ts`. 26 tests
+total.
 
 The canvas layer is tested separately under **jsdom**
-(`src/ui/__tests__/CircuitCanvas.test.tsx`, 12 tests): components/wires
-render from a snapshot; the LED reflects snapshot state; press/release,
-connect, and disconnect events relay to the parent with the right
-payloads; same-pin double-click cancels; a removed wire disappears;
-layer order is enforced; a dropped palette line places a component at
-the drop point (and non-palette payloads are ignored); bodies drag to
-move past a 4px threshold. Palette placement end-to-end (drop → worker
-message → pin wiring → Stop replay survival) is covered in
-`src/App.test.tsx` (4 tests) with a fake `Worker` stub. The worker's
+(`src/ui/__tests__/CircuitCanvas.test.tsx`, 23 tests): components/wires
+render from a snapshot; the LED reflects snapshot state (`data-on`),
+selection ring, press/release, connect, and disconnect; wire endpoints
+track the body wrapper positions (`style.left/top`); a dropped palette
+line places a component at the drop point (and non-palette payloads are
+ignored); bodies drag to move past a threshold. Palette placement
+end-to-end (drop → worker message → pin wiring → Stop replay survival)
+and placed-part deletion are covered in `src/App.test.tsx` (9 tests)
+with a fake `Worker` stub. The worker's
 message handling is plain-TS and tested in Node
-(`src/execution/__tests__/CircuitHost.test.ts`, 6 tests) — no
+(`src/execution/__tests__/CircuitHost.test.ts`, 14 tests) — no
 Worker/Pyodide needed. Dev deps `jsdom` +
 `@testing-library/react` are required for the jsdom suite only.
 
 `npm run verify:python` runs the **real Pyodide** (npm package, a few
 seconds) against the actual `src/execution/machine-shim.py` and
 `CircuitHost`: a `machine.Pin` script drives a wired LED on and off
-(asserted against the engine snapshot), IN pins read correctly, the JSPI
+(asserted against the engine snapshot), IN pins read correctly, the
+third `PULL_UP`/`PULL_DOWN` argument maps to `Pin.pull` and is live
+immediately (via `Circuit.resolveNow()`), the JSPI
 sleep path runs (Node 26 enables WebAssembly stack switching by
 default), the busy-wait fallback is verified by temporarily forcing it,
 `print()` reaches the output route, and `import machine.PWM` raises a
@@ -90,36 +92,42 @@ when touching the shim or bridge. jsdom cannot run Web Workers or
 Pyodide, so the worker boot in a real browser is covered by
 `node scripts/browser-verify.mjs <url>` (headless Edge over CDP: canvas
 render, button relay, Run-blink, Stop recovery, palette drop/wire/drag/
-delete, Stop-survival, conflict detection, and non-blocking sleep
-mid-script) — see below.
+delete, Stop-survival, the 3V3↔GND conflict banner, and non-blocking
+sleep mid-script) — see below.
 
 ## Project layout
 
 ```
 src/
   engine/            pure simulation. No DOM, no React, no Pyodide.
-    Pin.ts           connection point: id, label, mode (IN/OUT/UNSET), value
+    Pin.ts           connection point: id, label, mode (IN/OUT/UNSET),
+                     value, pull (UP/DOWN/NONE), analogValue, netId
     Wire.ts          a pair of pins
-    Component.ts     abstract base (pin lookup, addPin, update, getRenderInfo)
+    Component.ts     abstract base (pin lookup, addPin, update,
+                     getRenderInfo, optional getInternalConnections)
     Circuit.ts       owns components/wires; resolveNets() + tick(dt)
+                     + resolveNow()
     RenderInfo.ts    discriminated union the canvas switches on to draw
     components/
       PicoBoard.ts   GPIO0–GPIO28, 3V3, GND
       LED.ts         on/off only — deliberately minimal
-      Button.ts      drives HIGH/LOW from press()/release()
+      Button.ts      4-leg passive switch: 2 permanent strip pairs,
+                     press bridges strips (leg1a–leg2a)
     __tests__/       Vitest unit tests
-  ui/                React + SVG canvas rendering
-    ComponentPalette.tsx  drag sources: LED + Button
-    CircuitCanvas.tsx     snapshot renderer + input relay (3 SVG layers,
-                          click-to-wire, click-to-delete-wire, drop-to-place,
-                          drag-to-move)
+  ui/                React + canvas rendering
+    ComponentPalette.tsx  drag sources: LED + Button (+ scaled previews)
+    CircuitCanvas.tsx     snapshot renderer + input relay; scaled HTML
+                          stage (1200×700) under SVG wire/pin overlays
     ScriptPanel.tsx       MicroPython editor + Run/Stop + output
-    components/           LedView, PicoBoardView, ButtonView (presentational)
+    components/           LedView, PicoBoardView, ButtonView (+ wokwi
+                          custom elements from the published
+                          @wokwi/elements package, MIT)
     __tests__/            jsdom UI tests (CircuitCanvas.test.tsx)
   execution/         Pyodide + machine shim + worker
     messages.ts           client↔worker protocol (single source of truth)
     worker-core.ts        CircuitHost: owns the live Circuit, handles edits
-    machine-shim.py       importable `machine` module (Pin + JSPI/busy-wait sleep)
+    machine-shim.py       importable `machine` module (Pin w/ IN/OUT/
+                          PULL_UP/PULL_DOWN + JSPI/busy-wait sleep)
     pyodide.worker.ts     Worker (module worker): Pyodide npm pkg + CDN
                           wasm assets via indexURL, shim install, 60fps snapshots
     __tests__/            CircuitHost + real-Pyodide integration tests
@@ -150,33 +158,37 @@ used to rebuild a terminated worker). See `docs/ARCHITECTURE.md`.
 
 An runnable end-to-end proof: the **interactive canvas + Python demo** in
 `src/App.tsx`. `npm run dev`, open the printed URL, and you get a live
-circuit on an SVG canvas:
+circuit on a canvas:
 
-- **Pico board, two LEDs, and a button** drawn from engine
-  `getRenderInfo()` (read from worker snapshots).
-- **Press and hold the green button** → `GPIO15` goes HIGH → the first
-  LED lights; release → it goes off. The worker ticks
+- **Pico board, two LEDs, and a button** using the published (MIT)
+  `@wokwi/elements` package for the LED/button and a hand-drawn SVG
+  board, all rendered from `getRenderInfo()` (read from worker
+  snapshots).
+- **Press and hold the green button** → its strips are permanently
+  shorted (`leg1a`–`leg1b`, `leg2a`–`leg2b`); pressing bridges them
+  (`leg1a`–`leg2a`), pulling 3V3 onto the `GPIO15` pull-down net → the
+  first LED lights; release → it goes off. The worker ticks
   `circuit.tick(1/60)` ~60 times a second.
 - **Click-to-wire**: click a pin (it highlights), then click a pin on
   another component to create a wire; click the same pin twice to
   cancel. Try wiring the second LED's anode to a free GPIO — still works
   at runtime.
 - **Click-to-delete-wire**: click any wire to remove it (hover shows a
-  pointer + darker color). The canvas paints bodies → wires → pins in
-  three layers, so wires always show on top of component bodies and pins
-  stay visible/clickable over everything.
+  pointer + darker color). Wires and pins are drawn as SVG overlays
+  above the HTML stage, so they always show on top of component bodies
+  and pins stay visible/clickable over everything.
 - **Palette + drag**: drag an LED or Button from the sidebar palette onto
   the canvas to place it (it lands where you drop it), drag any part's
   body to reposition it, and wire it like the demo parts. Placed parts
   survive Stop — the topology record replays them into the fresh worker,
   and their positions are plain UI state, so nothing jumps after a
-  respawn. Deleting placed parts is the next milestone.
+  respawn. Select a part (ring highlight) and hit Delete/Backspace or
+  the floating Delete button to remove it along with its wires.
 - **MicroPython**: click Run with the default blink program and the
   second LED (`GPIO16`) blinks on/off from `machine.Pin` writes; Stop
   kills the running script (even a stuck loop) and immediately rebuilds
-  the wiring. The button demo stays wired to `GPIO15` so Python `OUT`
-  pins never share a net with the button's signal pin (two drivers on
-  one net resolve to `FLOATING`).
+  the wiring. `machine.Pin(id, IN/OUT, PULL_UP/PULL_DOWN?)` now supports
+  the third pull argument.
 
 **Browser support note — `time.sleep` and Firefox.** Where the browser
 ships WebAssembly stack switching (JSPI) — Chrome and Edge — `time.sleep`
@@ -193,27 +205,32 @@ The engine tests (`npm test`) prove the circuit logic headlessly, the
 canvas suite proves render + relay under jsdom, and
 `npm run verify:python` proves the real `machine.Pin` shim drives the
 real circuit through actual Pyodide. For the whole stack in a real
-browser (worker boot, Run/Stop, replay, palette placement), run a dev
+browser (worker boot, Run/Stop, replay, palette placement, conflict
+warnings, non-blocking sleep), run a dev
 server and
-`node scripts/browser-verify.mjs http://localhost:5173` — drives
-headless Edge over CDP through the same five checks listed above.
+`node scripts/browser-verify.mjs http://localhost:5228` — drives
+headless Edge over CDP through the checks listed above.
 
 ## Build order & where things are headed
 
 See `docs/ROADMAP.md`. The next milestones:
 
 1. **Canvas rendering** — components drawn from `getRenderInfo()`, click
-   between pins to create wires. ✅ Done (fixed demo layout, click-to-wire).
+   between pins to create wires. ✅ Done (scaled HTML stage + SVG overlays,
+   click-to-wire).
 2. **Code execution** — Pyodide (in a Web Worker) + a `machine` shim so user
    MicroPython like `machine.Pin(15, machine.Pin.OUT).value(1)` flips engine
    pins. ✅ Pin-only shim; Stop terminates + replays wiring; `PWM`/`ADC`/`I2C`
    and pause/step still open.
 3. **Component palette / drag editing** — drop parts onto the canvas, drag
-   them around. ✅ Done (drop-to-place + drag-to-move, Stop-survival);
-   **deleting placed parts** is the immediate next item.
-4. **Validation/error states** — real short-circuit/conflict detection. ⬜
+   them around, delete them. ✅ Done (drop-to-place + drag-to-move +
+   delete, all Stop-survivable).
+4. **Validation/error states** — short-circuit/conflict detection. ✅
+   Diagnostic `hasConflict` flag → red dashed wires + `⚠ N wire
+   conflicts` banner (warning, not prevention); other validation states
+   (undeclared pins, unmapped Python pin numbers) still open.
 5. **Component library growth** — one component at a time, only when a
-   feature needs it. ⬜
+   feature needs it. ⬜ (LED + Button + pulls done; more pending.)
 
 ## Ground rules for contributors (brief)
 

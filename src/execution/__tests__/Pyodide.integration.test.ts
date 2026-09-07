@@ -23,7 +23,7 @@ const shimSource = readFileSync(join(here, "..", "machine-shim.py"), "utf8");
 // is exactly what pyodide.ffi.can_run_sync() reports in the caller's runtime.
 function installShim(py: any, host: CircuitHost, canRunSync: boolean): void {
   const bridge = {
-    setup: (gpio: number, mode: number) => host.setupPin(gpio, mode),
+    setup: (gpio: number, mode: number, pull: number | null) => host.setupPin(gpio, mode, pull),
     read: (gpio: number) => host.readPin(gpio),
     write: (gpio: number, value: number) => {
       host.writePin(gpio, value);
@@ -90,8 +90,24 @@ assert led.value() == 1
 
 probe = machine.Pin(16, machine.Pin.IN)
 assert probe.value() == 0
+
+# machine.Pin's third arg sets the pull; undriven IN pins then read their
+# pull state instead of floating.
+pulled_up = machine.Pin(17, machine.Pin.IN, machine.Pin.PULL_UP)
+assert pulled_up.value() == 1
+
+pulled_down = machine.Pin(18, machine.Pin.IN, machine.Pin.PULL_DOWN)
+assert pulled_down.value() == 0
+
+# Omitting the third arg leaves the pin unpulled (reads 0 while undriven).
+plain = machine.Pin(19, machine.Pin.IN)
+assert plain.value() == 0
 `);
       expect(host.readPin(15)).toBe(1);
+      // The pull settings landed on the board's GPIOs, not just in Python.
+      expect(host.componentById("board")!.pin("GPIO17").pull).toBe("UP");
+      expect(host.componentById("board")!.pin("GPIO18").pull).toBe("DOWN");
+      expect(host.componentById("board")!.pin("GPIO19").pull).toBe("NONE");
       expect(host.getSnapshot().components.find((c) => c.id === "led")!.renderInfo).toEqual({
         type: "led",
         isOn: true,
