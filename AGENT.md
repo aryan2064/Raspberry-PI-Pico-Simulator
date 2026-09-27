@@ -55,7 +55,11 @@ that's the one rule this project cannot bend on. See
 
 - [x] Core data model built and verified: `Pin`, `Wire`, `Component`
   (abstract base), `Circuit` (union-find net resolution + `tick(dt)`)
-- [x] `PicoBoard` component (GPIO0–GPIO28, 3V3, GND)
+- [x] `PicoBoard` component — **real Raspberry Pi Pico header pinout**:
+      40 pins (26 GPIOs GPIO0–22 + GPIO26–28; 8 GND pads tied as one
+      ground plane; VBUS/VSYS/3V3_EN/3V3_OUT/ADC_VREF/RUN). GP23/24/25
+      are not on the header and don't exist on the engine (see the "real
+      pinout" bullet below)
 - [x] `LED` component (on/off only, no brightness — deliberately minimal)
 - [x] `Button` component — a **passive switch**, not a driver: four
       `UNSET` legs (`leg1a`/`leg1b`/`leg2a`/`leg2b`). A real push button
@@ -68,7 +72,7 @@ that's the one rule this project cannot bend on. See
       nets, releases split them, with no wire edit and no way to create
       a driver conflict. Combined with `Pin.pull` (UP/DOWN/NONE net
       fallback; never a driver, never a conflict source) this is how the
-      demo button lights its LED: 3V3 → button.leg1a → button.leg2a →
+      demo button lights its LED: 3V3_OUT → button.leg1a → button.leg2a →
       GPIO15 (IN, pull-down) → LED anode.
 - [x] Vite + React + TypeScript project scaffolded (project root), builds
       and typechecks clean, `npm run dev` shows the interactive canvas
@@ -85,17 +89,36 @@ that's the one rule this project cannot bend on. See
       (real-Pyodide end-to-end; run with `npm run verify:python`).
       `src/test/setup.ts` patches jsdom's missing `crypto.randomUUID`
       (the engine's `newId()`), registered via `test.setupFiles`.
-      Current totals: **74 passing + 1 skipped** (18 Circuit / 4 analog /
-      6 button / 14 CircuitHost / 23 canvas / 9 App /
-      Pyodide.integration skipped by default — run it with
+      Current totals: **92 passing + 1 skipped** (18 Circuit / 7
+      PicoBoard / 6 LedBrightness / 4 analog / 6 button / 19 CircuitHost /
+      23 canvas /
+      9 App; Pyodide.integration skipped by default — run it with
       `npm run verify:python`).
 - [x] Analog value channel on `Pin` (`analogValue: number | null`, 0–1
       duty for OUT pins) + analog propagation step in `Circuit.tick()`,
       independent of the digital channel; covered by
-      `src/engine/__tests__/Analog.test.ts` (4 tests passing).
-      **Note:** `machine.PWM` shim and LED brightness are still
-      separate, un-started work — committing to the channel does
-      not do either of those.
+      `src/engine/__tests__/Analog.test.ts` (4 tests passing). Built on
+      top of it: **`machine.PWM` shim + LED brightness** (below), which
+      make the channel actually consume duty values.
+- [x] `machine.PWM` shim + LED brightness — `PWM` in
+      `machine-shim.py` (`duty_u16()` sets/reads the pin's analog
+      channel as `value/65535`; `freq()` is stored, never simulated;
+      `deinit()` clears the channel), host bridge methods
+      `initPwm`/`setAnalogDuty`/`deinitPwm` in `worker-core.ts`
+      (each `resolveNow()` so writes are immediately visible, like the
+      pull fix), and the worker bridge entries `pwmSetup`/`pwmDuty`/
+      `pwmDeinit` (tick + snapshot in the same turn, mirroring `write`).
+      `LED.update()` now maps an anode `analogValue` to a clamped
+      `brightness` in `RenderInfo` (`{ type:"led", isOn: brightness>0,
+      brightness }`, with the digital HIGH/LOW uniform 1/0 fallback), and
+      `LedView` sets both `value` and `brightness` on the real
+      `wokwi-led` (verified capability — see DECISIONS). Tests:
+      `src/engine/__tests__/LedBrightness.test.ts` (6), CircuitHost PWM
+      bridge block (5), Pyodide integration runs a duty sweep + fade
+      `sleep` loop against the real engine, and a CDP browser probe
+      observed intermediate brightness 0.250/0.625/1.000 on the live
+      DOM with `wokwi-led.brightness` exactly 0.2500038147554742 at
+      `duty_u16(16384)`. Script-only feature (no manual UI PWM control).
 - [x] Canvas rendering — in `src/ui/`
       (`CircuitCanvas.tsx` + `components/{LedView,PicoBoardView,
       ButtonView}.tsx`). Since the execution milestone it is a
@@ -109,10 +132,11 @@ that's the one rule this project cannot bend on. See
       svgs, `auto` on individual wire/pin groups). The overlays carry
       the **same `transform: scale()`** as the stage (both pin/wire SVG
       coords stay in stage units), and each marker sits at its body
-      origin + the wokwi element offset (LED anode `(25,42)`/
+      origin + the component offset (LED anode `(25,42)`/
       cathode `(15,42)`; button `1.l(0,13)`/`1.r(67,13)`/`2.l(0,32)`/
-      `2.r(67,32)`; board GPIO0–28 `x = 14 + i*10`, `3V3`=304, `GND`=314,
-      `y`=112) — asserted to sub-pixel in browser-verify step 1b. LED
+      `2.r(67,32)`; board pads come from Raspberry Pi's **official
+      Fritzing part** for the original Pico (see below), re-verified to
+      sub-pixel in browser-verify step 1b). LED
       and button visuals are the **published `@wokwi/elements`** (MIT)
       package custom elements, registered once via the side-effect
       `import "@wokwi/elements"` in `main.tsx` and driven through refs
@@ -120,8 +144,22 @@ that's the one rule this project cannot bend on. See
       attributes as strings. They are a normal npm dependency (a
       vendoring attempt was evaluated and reverted as unnecessary since
       the package ships pre-compiled JS; see `docs/DECISIONS.md`); the
-      pin offsets come from the elements' `pinInfo`. The board stays a
-      hand-drawn SVG. All client→stage
+      pin offsets come from the elements' `pinInfo`. The board is a
+      static SVG: Raspberry Pi's official `Pico-R3-Fritzing.fzpz`
+      breadboard view (`svg.breadboard.rpi_pico-tht_1_breadboard.svg`,
+      from `https://pip.raspberrypi.com/documents/RP-008310-DS`),
+      shipped as `src/ui/assets/pico-breadboard.svg` with the root dims
+      rewritten and its drawing group given the baked-in
+      `matrix(0 0.16 0.16 0 0 0)` (landscape, USB right, 0.16 stage
+      units per Fritzing unit). `picoPinOffsets` are **extracted from
+      the part's own `connector{N}pin` circles** (43 connectors: pins
+      1–40 + SWD debug) mapped through that same matrix — position =
+      (0.16·cy, 0.16·cx). See the "real Pico header pinout" bullet
+      below for the corrected engine↔pad mapping — the part's
+      connector ids are **not** the header pin numbers on the right
+      column, and an earlier build used them interchangeably (see
+      `docs/DECISIONS.md`). Board renders via a bare `<image>`).
+      All client→stage
       coordinate math goes through `clientToStagePoint()` (drop/drag
       robust at any scale). Click-to-wire pin connections, clickable
       wires with a wide transparent hit-area + hover highlight, and
@@ -157,8 +195,9 @@ that's the one rule this project cannot bend on. See
       full flow (canvas renders, Run blinks LED2, Stop recovers from
       `while True`, palette drop/wire/drag/Stop-survival) against dev
       AND production build in headless Edge.
-      Known limits: `machine.PWM`/`ADC`/`I2C`, pause/step debugging,
-      and wakeable/precise sleeps are not implemented. The JSPI
+      Known limits: `machine.ADC`/`I2C` and any analog *streaming*
+      (PWM frequency timing stays out of scope — duty only), pause/step
+      debugging, and wakeable/precise sleeps are not implemented. The JSPI
       non-blocking `time.sleep` (responsive sim mid-sleep) works in
       Chrome/Edge; **Firefox has no JSPI, so it busy-waits** (script
       pauses the worker for the sleep duration). See DECISIONS.
@@ -205,7 +244,7 @@ that's the one rule this project cannot bend on. See
       a `⚠ N wire conflicts` banner (warning, not prevention — see
       DECISIONS). Net resolution itself is unchanged (still
       `FLOATING`/`null`). Verified by engine + CircuitHost + canvas
-      tests and a browser-verify step (3V3↔GND short → red dashed
+      tests and a browser-verify step (3V3_OUT↔GND short → red dashed
       wires + "4 wire conflicts" banner; disconnect → cleared). A
       passive button press can merge two already-conflicting nets, but
       the button itself can never create a conflict.
@@ -216,6 +255,28 @@ that's the one rule this project cannot bend on. See
       configured; a busy-waiting script froze the tick loop, so waiting a
       tick was not an option). Verified by CircuitHost tests + the real
       Pyodide integration test (`npm run verify:python`).
+- [x] Real Pico header pinout on `PicoBoard` + `PicoBoardView` — the
+      board now models **all 40 physical header pins** instead of a
+      reduced GPIO-only set. Engine (`src/engine/components/PicoBoard.ts`):
+      26 GPIOs (GPIO0..GPIO22, GPIO26..GPIO28) as `UNSET`; the eight GND
+      pads (`GND` at pin 38 + `GND_1`..`GND_7` at pins
+      3,8,13,18,23,28,33) form **one ground plane** via
+      `HasInternalConnections` (the Button's net-merge trick), with the
+      single `GND` driver `OUT LOW` and the rest `UNSET` so wiring to any
+      GND pad behaves identically and never looks like a multi-driver
+      short; `3V3_OUT` keeps the historic "3V3" rail (`OUT HIGH`) so the
+      demo button still has a supply; VBUS/VSYS/3V3_EN/ADC_VREF/RUN are
+      `UNSET` (exist + wireable, no simulated behavior). **GP23/24/25 are
+      gone from the engine** (`machine.Pin(23)` throws "no pin labeled
+      …"); each marker now sits on its true pad — right-column labels
+      follow the connector↔pin mapping (connector20=pin21 VBUS …
+      connector39=pin40 GPIO16), fixing where the old build drew its
+      right-column markers (see `docs/DECISIONS.md`). Verified by 7 new
+      engine tests, updated LED/Button/CircuitHost/App/canvas tests
+      (`3V3` renamed to `3V3_OUT`), typecheck + build, real Pyodide, and
+      browser-verify step 1b (GPIO16, GPIO28, 3V3_OUT, GND, GPIO17
+      sub-pixel against extracted connector coords) + step 7
+      (`3V3_OUT`↔GND conflict).
 - [ ] Validation / error states beyond conflict detection (undeclared
       pins, unmapped Python pin numbers, etc.) — not started.
 - [ ] Component library beyond LED/Button/pulls — not started

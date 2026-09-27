@@ -113,6 +113,21 @@ async function ensurePyodide(): Promise<any> {
           host.tick(1 / 60);
           ctx.postMessage(host.getSnapshot());
         },
+        // machine.PWM — mirror the write pattern above: set duty, then tick
+        // (so the LED's update() sees the new analog value immediately) and
+        // post a snapshot so the UI reacts in the same turn the Python write
+        // returns, even while a script holds the worker busy.
+        pwmSetup: (gpio: number) => host.initPwm(gpio),
+        pwmDuty: (gpio: number, duty: number) => {
+          host.setAnalogDuty(gpio, duty);
+          host.tick(1 / 60);
+          ctx.postMessage(host.getSnapshot());
+        },
+        pwmDeinit: (gpio: number) => {
+          host.deinitPwm(gpio);
+          host.tick(1 / 60);
+          ctx.postMessage(host.getSnapshot());
+        },
         // The sleep implementation the machine shim should use (see
         // machine-shim.py): true -> non-blocking JSPI sleep; false/absent ->
         // keep the historical busy-wait.

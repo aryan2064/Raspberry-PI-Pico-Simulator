@@ -23,12 +23,14 @@ a Web Worker**.
 | Net resolution via union-find + `tick(dt)` simulation step | ✅ Built & tested |
 | Analog channel (`Pin.analogValue`, 0–1 PWM duty) + analog propagation in `tick()` | ✅ Built & tested (digital behavior untouched) |
 | Pin pulls (`Pin.pull`: UP/DOWN/NONE net fallback) + passive `Button` (4 legs, permanent strip pairs + press bridge via `getInternalConnections()`) | ✅ Built & tested |
-| Unit tests (Vitest) | ✅ 74 passing (18 Circuit / 4 analog / 6 button / 14 CircuitHost / 23 canvas-jsdom / 9 App-level), plus 1 real-Pyodide integration test |
+| Unit tests (Vitest) | ✅ 92 passing (18 Circuit / 7 PicoBoard / 6 LedBrightness / 4 analog / 6 button / 19 CircuitHost / 23 canvas-jsdom / 9 App-level), plus 1 real-Pyodide integration test |
 | Vite + React + TypeScript scaffold | ✅ Builds & runs |
 | `@wokwi/elements` visuals (LED, button) + scaled HTML-stage canvas (pin markers aligned to element `pinInfo`) | ✅ Built & verified in-browser |
 | Canvas rendering (snapshot renderer; click-to-wire, click-to-delete-wire) | ✅ Built & tested |
 | Component palette + drag-to-place/drag-to-move (LED, Button) + deleting placed parts | ✅ Built & tested (survives Stop/replay) |
 | Pyodide in a Web Worker + `machine.Pin` shim (worker owns the live `Circuit`) | ✅ Built & verified (incl. real-Pyodide script driving a wired LED on/off) |
+| `machine.PWM` (duty only) → LED brightness over the analog channel | ✅ Built & verified (a `duty_u16` fade sweeps a real `wokwi-led` noticeably dim→bright; `freq()` stored, never simulated) |
+| Real Pico header pinout on the board (40 pins: 26 GPIOs, 8 GND pads as one ground plane, `3V3_OUT`, non-GPIO pins UNSET; GP23/24/25 absent) | ✅ Built & verified (markers sub-pixel on every checked pad in-browser) |
 | Validation/error states (short-circuit conflicts: red dashed wires + banner) | ✅ Conflict detection built (diagnostic `hasConflict` flag) |
 | Component library beyond `LED` | ◐ LED + Button only (more added only when a feature needs one) |
 
@@ -60,8 +62,11 @@ fallback semantics), `Analog.test.ts` (analog `analogValue` channel:
 single-driver propagation, no-driver → `null`, multi-driver placeholder,
 channel independence), `Button.test.ts` (passive switch with 4 legs — two permanent strip
 pairs `leg1a`/`leg1b` + `leg2a`/`leg2b`, press adds `leg1a`–`leg2a`;
-pull-down keeps the undriven net LOW, no conflict from pulls), and the PicoBoard-pin tests inside `Circuit.test.ts`. 26 tests
-total.
+pull-down keeps the undriven net LOW, no conflict from pulls), and
+`PicoBoard.test.ts` (real 40-pin header: 26 GPIOs, the eight tied GND
+pads as one ground plane, non-GPIO pins present, `3V3_OUT` rail, and
+GP23/24/25 throwing "no pin labeled…" — they're not on the header). 35
+tests total across those four suites.
 
 The canvas layer is tested separately under **jsdom**
 (`src/ui/__tests__/CircuitCanvas.test.tsx`, 23 tests): components/wires
@@ -74,7 +79,7 @@ end-to-end (drop → worker message → pin wiring → Stop replay survival)
 and placed-part deletion are covered in `src/App.test.tsx` (9 tests)
 with a fake `Worker` stub. The worker's
 message handling is plain-TS and tested in Node
-(`src/execution/__tests__/CircuitHost.test.ts`, 14 tests) — no
+(`src/execution/__tests__/CircuitHost.test.ts`, 19 tests) — no
 Worker/Pyodide needed. Dev deps `jsdom` +
 `@testing-library/react` are required for the jsdom suite only.
 
@@ -86,13 +91,15 @@ third `PULL_UP`/`PULL_DOWN` argument maps to `Pin.pull` and is live
 immediately (via `Circuit.resolveNow()`), the JSPI
 sleep path runs (Node 26 enables WebAssembly stack switching by
 default), the busy-wait fallback is verified by temporarily forcing it,
-`print()` reaches the output route, and `import machine.PWM` raises a
-clean ImportError. It is skipped by `npm test` (it adds seconds); run it
+`print()` reaches the output route, `machine.PWM` runs a `duty_u16`
+sweep + fade `sleep` loop against the live engine (brightness asserted
+from the snapshot), and `import machine.ADC` raises a clean
+ImportError. It is skipped by `npm test` (it adds seconds); run it
 when touching the shim or bridge. jsdom cannot run Web Workers or
 Pyodide, so the worker boot in a real browser is covered by
 `node scripts/browser-verify.mjs <url>` (headless Edge over CDP: canvas
 render, button relay, Run-blink, Stop recovery, palette drop/wire/drag/
-delete, Stop-survival, the 3V3↔GND conflict banner, and non-blocking
+delete, Stop-survival, the 3V3_OUT↔GND conflict banner, and non-blocking
 sleep mid-script) — see below.
 
 ## Project layout
@@ -109,7 +116,9 @@ src/
                      + resolveNow()
     RenderInfo.ts    discriminated union the canvas switches on to draw
     components/
-      PicoBoard.ts   GPIO0–GPIO28, 3V3, GND
+      PicoBoard.ts   real 40-pin Pico header: 26 GPIOs (GPIO0–22,
+                     GPIO26–28), 8 GND pads one ground plane, 3V3_OUT
+                     (+ VBUS/VSYS/3V3_EN/ADC_VREF/RUN UNSET)
       LED.ts         on/off only — deliberately minimal
       Button.ts      4-leg passive switch: 2 permanent strip pairs,
                      press bridges strips (leg1a–leg2a)
@@ -161,12 +170,22 @@ An runnable end-to-end proof: the **interactive canvas + Python demo** in
 circuit on a canvas:
 
 - **Pico board, two LEDs, and a button** using the published (MIT)
-  `@wokwi/elements` package for the LED/button and a hand-drawn SVG
-  board, all rendered from `getRenderInfo()` (read from worker
+  `@wokwi/elements` package for the LED/button and Raspberry Pi's
+  official Fritzing breadboard part for the original Pico (vendored as
+  a static SVG from `pip.raspberrypi.com/documents/RP-008310-DS`,
+  pin offsets extracted from the part's own connector markup), all
+  rendered from `getRenderInfo()` (read from worker
   snapshots).
+- **All 40 real Pico header pins** are interactive: the board models
+  26 exposed GPIOs (`GPIO0`–`GPIO22`, `GPIO26`–`GPIO28`), all eight
+  GND pads tied as one ground plane (wire to any GND and they behave
+  identically), the 3.3V rail (`3V3_OUT`, HIGH), and the
+  non-GPIO pads (VBUS/VSYS/3V3_EN/ADC_VREF/RUN). GP23/24/25 don't exist
+  on the header, so `machine.Pin(23)` throws "no pin labeled GPIO23".
+  Pinout follows the official Pico header (see `docs/DECISIONS.md`).
 - **Press and hold the green button** → its strips are permanently
   shorted (`leg1a`–`leg1b`, `leg2a`–`leg2b`); pressing bridges them
-  (`leg1a`–`leg2a`), pulling 3V3 onto the `GPIO15` pull-down net → the
+  (`leg1a`–`leg2a`), pulling 3V3_OUT onto the `GPIO15` pull-down net → the
   first LED lights; release → it goes off. The worker ticks
   `circuit.tick(1/60)` ~60 times a second.
 - **Click-to-wire**: click a pin (it highlights), then click a pin on
@@ -208,7 +227,7 @@ real circuit through actual Pyodide. For the whole stack in a real
 browser (worker boot, Run/Stop, replay, palette placement, conflict
 warnings, non-blocking sleep), run a dev
 server and
-`node scripts/browser-verify.mjs http://localhost:5228` — drives
+`node scripts/browser-verify.mjs http://localhost:5173` — drives
 headless Edge over CDP through the checks listed above.
 
 ## Build order & where things are headed
@@ -220,8 +239,8 @@ See `docs/ROADMAP.md`. The next milestones:
    click-to-wire).
 2. **Code execution** — Pyodide (in a Web Worker) + a `machine` shim so user
    MicroPython like `machine.Pin(15, machine.Pin.OUT).value(1)` flips engine
-   pins. ✅ Pin-only shim; Stop terminates + replays wiring; `PWM`/`ADC`/`I2C`
-   and pause/step still open.
+   pins. ✅ Done (`machine.Pin` + `machine.PWM` duty-only); Stop terminates +
+   replays wiring; `ADC`/`I2C` and pause/step still open.
 3. **Component palette / drag editing** — drop parts onto the canvas, drag
    them around, delete them. ✅ Done (drop-to-place + drag-to-move +
    delete, all Stop-survivable).

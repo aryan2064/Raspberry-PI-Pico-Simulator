@@ -44,13 +44,14 @@ const BUTTON = { id: "button" };
 function makeSnapshot(
   isOn = false,
   isPressed = false,
-  conflictPinKeys: string[] = []
+  conflictPinKeys: string[] = [],
+  brightness = isOn ? 1 : 0
 ): SnapshotMessage {
   const pinsByKind: Record<string, Array<{ id: string; label: string }>> = {
     pico_board: [
       { id: "board:GPIO15", label: "GPIO15" },
       { id: "board:GPIO16", label: "GPIO16" },
-      { id: "board:3V3", label: "3V3" },
+      { id: "board:3V3_OUT", label: "3V3_OUT" },
       { id: "board:GND", label: "GND" },
     ],
     led: [
@@ -81,7 +82,7 @@ function makeSnapshot(
         renderInfo: { type: "pico_board" },
         pins: pinsByKind.pico_board,
       },
-      { id: LED.id, renderInfo: { type: "led", isOn }, pins: pinsByKind.led },
+      { id: LED.id, renderInfo: { type: "led", isOn, brightness }, pins: pinsByKind.led },
       {
         id: BUTTON.id,
         renderInfo: { type: "button", isPressed },
@@ -92,7 +93,7 @@ function makeSnapshot(
 }
 
 // Demo wiring (passive button circuit):
-//   w1: board.3V3 -> button.leg1a
+//   w1: board.3V3_OUT -> button.leg1a
 //   w2: board.GPIO15 -> led.anode
 //   w3: button.leg2a -> board.GPIO15
 //   w4: led.cathode -> board.GND
@@ -100,7 +101,7 @@ function makeConnections(wireIds = ["w1", "w2", "w3", "w4"]): TopologyConnection
   const all: TopologyConnection[] = [
     {
       wireId: "w1",
-      from: { componentId: BOARD.id, pinLabel: "3V3" },
+      from: { componentId: BOARD.id, pinLabel: "3V3_OUT" },
       to: { componentId: BUTTON.id, pinLabel: "leg1a" },
     },
     {
@@ -483,10 +484,10 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
   });
 
   describe("conflict warning (hasConflict -> conflictedPinIds)", () => {
-    // Wiring 3V3 (OUT HIGH) to GND (OUT LOW) is a genuine two-driver short:
+    // Wiring 3V3_OUT (OUT HIGH) to GND (OUT LOW) is a genuine two-driver short:
     // both pins are OUT from the moment the board is added.
     const conflictedBoardShort = () =>
-      makeSnapshot(false, false, ["board:3V3", "board:GND"]);
+      makeSnapshot(false, false, ["board:3V3_OUT", "board:GND"]);
     // the stroke line is the second <line> in each wire group; the first is
     // the transparent hit area
     const visibleLine = (wireTestId: string): Element => {
@@ -495,7 +496,7 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     };
 
     it("flag-style wires whose net is conflicted and show a single-wire banner", () => {
-      // Only w1 (3V3 -> button.leg1a) touches 3V3; w3/w2 don't touch 3V3 or GND.
+      // Only w1 (3V3_OUT -> button.leg1a) touches 3V3_OUT; w3/w2 don't touch 3V3_OUT or GND.
       renderCanvas(conflictedBoardShort(), makeConnections(["w1", "w3"]));
 
       expect(screen.getByTestId("wire-w1").getAttribute("data-conflicted")).toBe("true");
@@ -511,7 +512,7 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     });
 
     it("counts every wire on the conflicted net (plural banner)", () => {
-      // w1 (3V3 -> button.leg1a) and w4 (led.cathode -> GND) both touch the
+      // w1 (3V3_OUT -> button.leg1a) and w4 (led.cathode -> GND) both touch the
       // shorted net.
       renderCanvas(conflictedBoardShort(), makeConnections());
 

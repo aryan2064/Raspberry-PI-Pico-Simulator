@@ -8,13 +8,13 @@ import type { ComponentKind, PinRef, SnapshotMessage, Topology, WorkerToMainMess
 
 // The demo circuit everyone starts with. Two independent nets so the
 // interactive demo and the Python demo never fight:
-//   - 3V3 -> button leg1a; button leg2a -> GPIO15 -> LED1. The button is a
-//     passive switch: at rest its strips are open, and GPIO15 (pre-configured
+//   - 3V3_OUT -> button leg1a; button leg2a -> GPIO15 -> LED1. The button is
+//     a passive switch: at rest its strips are open, and GPIO15 (pre-configured
 //     IN with an internal pull-DOWN in pinSetups, the same reason the demo
 //     pre-sets pin state at all — it must work out of the box) keeps the
 //     node LOW so LED1 is off. While held, the switch bridges the two strips
-//     (leg1a-leg2a) up to 3V3 and LED1 lights; on release it drops back LOW.
-//     Press-and-hold the green button to light LED1.
+//     (leg1a-leg2a) up to 3V3_OUT and LED1 lights; on release it drops back
+//     LOW. Press-and-hold the green button to light LED1.
 //   - LED2 <-> GPIO16 (driven by the default MicroPython script)
 const INITIAL_TOPOLOGY: Topology = {
   components: [
@@ -29,7 +29,7 @@ const INITIAL_TOPOLOGY: Topology = {
   // it's part of the demo topology itself.
   pinSetups: [{ type: "setupPin", gpio: 15, mode: "IN", pull: "DOWN" }],
   connections: [
-    { wireId: "w1", from: { componentId: "board", pinLabel: "3V3" }, to: { componentId: "button", pinLabel: "leg1a" } },
+    { wireId: "w1", from: { componentId: "board", pinLabel: "3V3_OUT" }, to: { componentId: "button", pinLabel: "leg1a" } },
     { wireId: "w2", from: { componentId: "button", pinLabel: "leg2a" }, to: { componentId: "board", pinLabel: "GPIO15" } },
     { wireId: "w3", from: { componentId: "board", pinLabel: "GPIO15" }, to: { componentId: "led", pinLabel: "anode" } },
     { wireId: "w4", from: { componentId: "led", pinLabel: "cathode" }, to: { componentId: "board", pinLabel: "GND" } },

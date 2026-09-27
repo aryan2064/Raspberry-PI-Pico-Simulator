@@ -53,6 +53,40 @@ class Pin:
         self.value(0 if self.value() else 1)
 
 
+class PWM:
+    # Duty-cycle only — no frequency simulation. freq() merely stores its
+    # value (real hardware PWM timing is explicitly out of scope); only the
+    # duty actually drives the engine. duty_u16 maps MicroPython's 0..65535
+    # range onto the engine's analogValue channel (0..1) on the engine pin,
+    # which the forwarding pin/listeners (e.g. a LED's anode) already read.
+    # Creating a PWM configures the pin as an output, exactly like real
+    # hardware: self._pin.mode is mirrored on the shim Pin and the bridge
+    # tells the engine's pin the same so the net has an active OUT driver.
+    def __init__(self, pin):
+        self._pin = pin
+        self._freq = None
+        self._pin.mode = Pin.OUT
+        _bridge.pwmSetup(self._pin._pin)
+
+    def duty_u16(self, value=None):
+        if value is None:
+            return round((getattr(self._pin, "analog_value", None) or 0) * 65535)
+        duty = value / 65535
+        self._pin.analog_value = duty
+        _bridge.pwmDuty(self._pin._pin, duty)
+        return None
+
+    def freq(self, value=None):
+        if value is None:
+            return self._freq
+        self._freq = value
+        return None
+
+    def deinit(self):
+        self._pin.analog_value = None
+        _bridge.pwmDeinit(self._pin._pin)
+
+
 # time.sleep has two implementations, chosen at call time by a flag the worker
 # reports on the bridge (canRunSync == whether Pyodide's ffi.can_run_sync(), i.e.
 # JS Promise Integration / stack switching, is available in this runtime):

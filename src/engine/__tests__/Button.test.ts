@@ -77,8 +77,8 @@ describe("Button (passive 4-pin switch)", () => {
   });
 
   it("drives a pull-down net LOW at rest and HIGH while held (demo button circuit)", () => {
-    // 3V3 -> leg1a, leg2a -> GPIO15(IN, pull DOWN)
-    circuit.connect(board.pin("3V3"), button.pin("leg1a"));
+    // 3V3_OUT -> leg1a, leg2a -> GPIO15(IN, pull DOWN)
+    circuit.connect(board.pin("3V3_OUT"), button.pin("leg1a"));
     circuit.connect(button.pin("leg2a"), board.pin("GPIO15"));
     circuit.resolveNets();
     board.pin("GPIO15").mode = "IN";
@@ -90,7 +90,7 @@ describe("Button (passive 4-pin switch)", () => {
 
     button.press();
     circuit.tick(1 / 60);
-    // Shorted to 3V3 (OUT HIGH): active driver wins over pull-down -> HIGH.
+    // Shorted to 3V3_OUT (OUT HIGH): active driver wins over pull-down -> HIGH.
     expect(board.pin("GPIO15").value).toBe("HIGH");
 
     button.release();
@@ -102,7 +102,7 @@ describe("Button (passive 4-pin switch)", () => {
   it("wiring either leg of a strip drives the GPIO identically (leg1a vs leg1b)", () => {
     // Same circuit as the demo, but the rail lands on the OTHER leg of the
     // top strip — leg1b behaves exactly like leg1a because they are one net.
-    circuit.connect(board.pin("3V3"), button.pin("leg1b"));
+    circuit.connect(board.pin("3V3_OUT"), button.pin("leg1b"));
     circuit.connect(button.pin("leg2a"), board.pin("GPIO15"));
     circuit.resolveNets();
     board.pin("GPIO15").mode = "IN";

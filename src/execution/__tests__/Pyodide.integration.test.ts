@@ -29,6 +29,15 @@ function installShim(py: any, host: CircuitHost, canRunSync: boolean): void {
       host.writePin(gpio, value);
       host.tick(1 / 60);
     },
+    pwmSetup: (gpio: number) => host.initPwm(gpio),
+    pwmDuty: (gpio: number, duty: number) => {
+      host.setAnalogDuty(gpio, duty);
+      host.tick(1 / 60);
+    },
+    pwmDeinit: (gpio: number) => {
+      host.deinitPwm(gpio);
+      host.tick(1 / 60);
+    },
     canRunSync,
   };
   // The `js` module in Pyodide proxies JS globals, so the bridge must go on
@@ -111,6 +120,7 @@ assert plain.value() == 0
       expect(host.getSnapshot().components.find((c) => c.id === "led")!.renderInfo).toEqual({
         type: "led",
         isOn: true,
+        brightness: 1,
       });
 
       // Turn it off and confirm via the engine, not just Python.
@@ -119,6 +129,7 @@ assert plain.value() == 0
       expect(host.getSnapshot().components.find((c) => c.id === "led")!.renderInfo).toEqual({
         type: "led",
         isOn: false,
+        brightness: 0,
       });
 
       // When JSPI is available (the common case on modern runtimes), time.sleep
@@ -152,9 +163,67 @@ assert plain.value() == 0
       py.runPython("print('hello-from-python')");
       expect(captured).toContain("hello-from-python");
 
+      // machine.PWM drives the analog duty channel. GPIO15 is wired to the
+      // demo LED's anode, so each duty_u16 write must land on the engine pin
+      // and light the LED at a matching brightness — confirmed from the
+      // engine's snapshot, not just from Python's read-back.
+      py.runPython(`
+import machine
+
+pwm = machine.PWM(machine.Pin(15, machine.Pin.OUT))
+pwm.freq(1000)  # stored on the object, never simulated (no frequency timing)
+
+# a fresh PWM reports 0% duty
+assert pwm.duty_u16() == 0
+
+pwm.duty_u16(16384)  # ~25% duty -> brightness ~0.25
+assert pwm.duty_u16() == 16384
+`);
+      const engineGpio15 = host.componentById("board")!.pin("GPIO15");
+      expect(engineGpio15.mode).toBe("OUT"); // creating the PWM made it an output
+      expect(engineGpio15.analogValue).toBeCloseTo(16384 / 65535, 8);
+      expect(
+        host.getSnapshot().components.find((c) => c.id === "led")!.renderInfo
+      ).toEqual({
+        type: "led",
+        isOn: true,
+        brightness: expect.closeTo(16384 / 65535, 8),
+      });
+
+      // Full duty and zero duty bracket the range; each lands on the LED.
+      py.runPython("pwm.duty_u16(65535)");
+      expect(
+        host.getSnapshot().components.find((c) => c.id === "led")!.renderInfo
+      ).toEqual({ type: "led", isOn: true, brightness: 1 });
+
+      py.runPython("pwm.duty_u16(0)");
+      expect(
+        host.getSnapshot().components.find((c) => c.id === "led")!.renderInfo
+      ).toEqual({ type: "led", isOn: false, brightness: 0 });
+
+      // The sample fade script: sweep the duty up and back down, pausing each
+      // step so the write takes effect, then deinit. The engine must track
+      // it: deinit drops the analog channel and the LED returns to its plain
+      // digital-LOW fallback.
+      py.runPython(`
+for duty in range(0, 65536, 8192):
+    pwm.duty_u16(duty)
+    time.sleep(0.01)
+for duty in range(65535, -1, -8192):
+    pwm.duty_u16(duty)
+    time.sleep(0.01)
+pwm.deinit()
+`);
+      expect(engineGpio15.analogValue).toBeNull();
+      expect(
+        host.getSnapshot().components.find((c) => c.id === "led")!.renderInfo
+      ).toEqual({ type: "led", isOn: false, brightness: 0 });
+
       // Out-of-scope machine modules must raise a normal Python ImportError,
-      // which the worker surfaces as an { type: "error" } message.
-      expect(() => py.runPython("import machine.PWM")).toThrow();
+      // which the worker surfaces as an { type: "error" } message. machine.PWM
+      // now exists, so the out-of-scope probe moves to machine.ADC (still not
+      // implemented — documented in AGENT.md / docs/ROADMAP.md as not done).
+      expect(() => py.runPython("import machine.ADC")).toThrow();
     },
     60000
   );

@@ -14,7 +14,7 @@
 //      part and its wire survive the worker replay at the dragged position.
 //   6. Delete: select -> Delete button / Delete key / editor-focus guard /
 //      Board exemption; deleted parts never reappear after Stop.
-//   7. Conflict: wiring 3V3 <-> GND (wire-w10) flags every wire on the merged
+//   7. Conflict: wiring 3V3_OUT <-> GND (wire-w10) flags every wire on the merged
 //      net red/dashed + a conflict banner; unwiring clears both.
 //   8. Non-blocking sleep (JSPI): during a time.sleep() blink script the button
 //      relay still lights LED1 promptly (worker event loop free mid-sleep) and
@@ -143,7 +143,7 @@ const state = () =>
   assert(s.boards === 1, "pico board did not render");
   assert(s.leds.length === 2, "expected two LEDs");
   assert(s.pressed === "false", "button should start unpressed");
-  assert(s.pins >= 10, "pins should render");
+  assert(s.pins >= 40, "pins should render");
   assert(
     s.wires.join(",") === ["wire-w1", "wire-w2", "wire-w3", "wire-w4", "wire-w5", "wire-w6"].join(","),
     "expected demo wires wire-w1..wire-w6, got " + s.wires
@@ -189,9 +189,13 @@ const state = () =>
         check('button', 'leg1b', 67, 13),
         check('button', 'leg2a', 0, 32),
         check('button', 'leg2b', 67, 32),
-        check('board', 'GPIO0', 14, 112),
-        check('board', 'GPIO15', 164, 112),
-        check('board', 'GND', 314, 112),
+        check('board', 'GPIO0', 21.21, 10.15),
+        check('board', 'GPIO15', 325.22, 10.08),
+        check('board', 'GPIO16', 21.22, 122.08),
+        check('board', 'GPIO28', 229.22, 122.08),
+        check('board', '3V3_OUT', 261.22, 122.08),
+        check('board', 'GND', 53.22, 122.08),
+        check('board', 'GPIO17', 37.22, 122.08),
       ],
     };
   })()`);
@@ -467,7 +471,7 @@ const state = () =>
     "Delete button should remove placed-1 and wire-w6",
     (x) => x.placedLed === null && !x.wires.includes("wire-w7") && x.placedBodies === 0
   );
-  assert(s.pins >= 36, "pins should drop back to the demo count after deletion, got " + s.pins);
+  assert(s.pins >= 40, "pins should drop back to the demo count after deletion, got " + s.pins);
   console.log("step6b deleted via button:", JSON.stringify(s));
 
   const dropLedAt = (stageX, stageY) => evaljs(`(()=>{
@@ -546,21 +550,21 @@ const state = () =>
 
   // ---- 7. Conflict detection: two OUT pins wired together flag the affected
   //         wires (red, dashed) and show a warning banner; unwiring clears
-  //         both. board.3V3 (OUT HIGH) <-> board.GND (OUT LOW) needs no Python
+//   both. board.3V3_OUT (OUT HIGH) <-> board.GND (OUT LOW) needs no Python
   //         to be a genuine two-driver short-circuit. The new short is w10:
   //         the six demo wires (w1-w6) plus w7/w8/w9 from steps 5/6 fill the
   //         earlier ids.
-  await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-3V3"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
+  await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-3V3_OUT"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
   await sleep(100);
   await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-GND"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
   s = await waitFor(
-    "wiring 3V3 to GND should flag conflicted wires and show the banner",
+    "wiring 3V3_OUT to GND should flag conflicted wires and show the banner",
     (x) =>
       x.wires.includes("wire-w10") &&
       x.conflictBanner !== null &&
       x.conflictedWires.length > 0
   );
-  // The short merges the 3V3 net (w1, and the short w10) with the GND net
+  // The short merges the 3V3_OUT net (w1, and the short w10) with the GND net
   // (w4, w6, and the short w10) — the button is unpressed, so its two strips
   // are not bridged (leg1b/leg2b carry no wires) and GPIO15's pull-down net
   // stays separate. Reporting order is graphic (top-to-bottom), not id order,

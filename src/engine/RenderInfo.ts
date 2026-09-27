@@ -5,6 +5,6 @@
 // exhaustively.
 
 export type RenderInfo =
-  | { type: "led"; isOn: boolean }
+  | { type: "led"; isOn: boolean; brightness: number }
   | { type: "button"; isPressed: boolean }
   | { type: "pico_board" };

@@ -1,4 +1,4 @@
-# Decision Log
+www# Decision Log
 
 Short "we chose X over Y, because Z" entries. Purpose: stop
 re-litigating settled architectural arguments. If you're an agent
@@ -373,7 +373,7 @@ pairs (`[leg1a,leg1b]`, `[leg2a,leg2b]` — a strip is a short between
 its duplicated legs even unpressed) and appends `[leg1a,leg2a]` while
 pressed (the strip-to-strip bridge). Net resolution treats those like
 extra wires connecting groups of pins, so a press can merge two
-otherwise-separate nets (e.g. closing the demo circuit between 3V3 and
+otherwise-separate nets (e.g. closing the demo circuit between 3V3_OUT and
 GPIO15) and a release can split them — no wire edit message involved,
 exactly how `tick()` re-resolves nets every step. The strips can never
 create a driverless shortcut, and since the button can't drive, pressing
@@ -420,6 +420,156 @@ unit tests never touch them — views `import type` the classes from
 keeping the element runtime out of test scope. The pin-marker offsets
 still come from the elements' `pinInfo`, verified identical between the
 published `1.9.2` and the cloned source that informed the offsets.
+**The Pico board visual is Raspberry Pi's official Fritzing breadboard part — adopted as a static asset; pin offsets come from the part's own markup**
+
+Checked the installed `@wokwi/elements` package (`1.9.2`) directly:
+enumerating every `customElement('wokwi-…')` tag in `dist/esm/*.js`
+yields exactly 50 elements and none is a Pi Pico; `grep` over the whole
+`dist/` for `pi-pico|rp2040|pico-board` matches only
+`wokwi-nano-rp2040-connect` (the Arduino Nano RP2040 Connect — a
+different board). Wokwi's `wokwi-pi-pico` is a *part* in the
+simulator's own library (used in `diagram.json` at wokwi.com), not a
+web component shipped by the npm package. So the board is our own
+static SVG — but instead of an approximate hand-drawn recreation, it is
+Raspberry Pi's own Fritzing part for the **original** Pico:
+`src/ui/assets/pico-breadboard.svg`, extracted from the official
+`Pico-R3-Fritzing.fzpz` at
+`https://pip.raspberrypi.com/documents/RP-008310-DS` (linked from
+`https://www.raspberrypi.com/documentation/microcontrollers/raspberry-pi-pico.html`).
+The fzpz's breadboard-view SVG is
+`Pico-R3-Fritzing.fzpz/svg.breadboard.rpi_pico-tht_1_breadboard.svg`
+(part title "Raspberry Pi Pico", author "Alasdair Allan/Jack Wills
+(modified by vanepp Jan 2021)", Fritzing 0.9.4).
+
+Official license terms from the documentation page (log for provenance;
+no attribution is required by them, but we record it anyway):
+
+> Design files for Raspberry Pi Pico and Pico H are openly available
+> with no limitations. Raspberry Pi grants permission to use, copy,
+> modify, and distribute the following designs for any purpose, with
+> or without fee. Designs are provided 'as-is' and the author disclaims
+> all warranties with regard to the design, including all implied
+> warranties of merchantability and fitness. In no event shall the
+> author be liable for any special, direct, indirect, or consequential
+> damages or any damages whatsoever resulting from loss of use, data,
+> or profits, whether in an action of contract, negligence, or other
+> tortious action, arising out of or in connection with the use or
+> performance of the design.
+
+Ship-it changes are deliberately minimal: only the root `<svg>` dims
+(`width`/`height`/`viewBox`/`overflow`) are rewritten and Raspberry
+Pi's drawing group gets `transform="matrix(0 0.16 0.16 0 0 0)"` baked
+in. That matrix maps the part's native portrait 0.827"×2.087" drawing
+into our landscape stage space — long edge horizontal, USB on the right,
+matching the physical Pico's pad order — at 0.16 stage units per
+Fritzing unit, so the part's 0.100" pad pitch (100 Fritzing units) is
+exactly the 16-stage-unit grid the pin overlay uses.
+
+The pin-offset map is **extracted from the part's own markup, not
+eyeballed**: each physical pad is an invisible
+`<circle id="connector{N}pin" cx cy r="16"/>` in the breadboard SVG
+(43 connectors: pins 1–40 plus the SWD debug header), and
+`PicoBoardView` derives every `picoPinOffsets` entry by mapping that
+(cx, cy) through the same matrix — position = (0.16·cy, 0.16·cx).
+Pins 1..20 run down the left edge (cx = 63.437519 for 1–8, 63.000015
+for 9–20), pins 21..40 up the right edge (cx = 763.00024). The `.fzp`
+labels the connectors, so the map's offsets aren't inferred from
+pin-name position heuristics; the `connector25 = "CP20"` typo in the
+part (GP20) is on the header's own silkscreen and irrelevant to the map.
+
+Engine-to-pad mapping (`PicoBoard` now models the **real header
+pinout** — 40 pins): each engine label below is placed on its actual
+physical pad, per the official board doc + the Zephyr `rpi-pico`
+device-tree binding, and every pad on the part now has a marker.
+Left column (pins 1–20): GPIO0, GPIO1, GND, GPIO2, GPIO3, GPIO4, GPIO5,
+GND, GPIO6, GPIO7, GPIO8, GPIO9, GND, GPIO10, GPIO11, GPIO12, GPIO13,
+GND, GPIO14, GPIO15. Right column (pins 21–40, running up from the USB
+end): VBUS, VSYS, GND, 3V3_EN, 3V3_OUT, ADC_VREF, GPIO28, GND, GPIO27,
+GPIO26, RUN, GPIO22, GND, GPIO21, GPIO20, GPIO19, GPIO18, GND, GPIO17,
+GPIO16.
+
+The **part's own connector ids are not the real pin numbers**, and the
+first board build used them interchangeably for the right column. That
+put its markers a few pads off the true positions (e.g. the old "3V3"
+landed on pin 36 — which is actually GPIO19 — and old GPIO16 on pin 21,
+which is VBUS). The right column corrected: connector 20…39 ↔ header
+pins 21…40 respectively, so connector20 (the pad next to GPIO15, at the
+USB end) is VBUS and connector39 (the far corner) is GPIO16. This table
+is the corrected one; the old marker coordinates for the right column
+were wrong and are not preserved.
+
+The eight **GND pads are one continuous plane** on the real board and
+are modeled as 8 pins (`GND` at physical pin 38, `GND_1`…`GND_7` at pins
+3, 8, 13, 18, 23, 28, 33) permanently tied via `HasInternalConnections`
+— the same net-merge mechanism the button's leg pairs use, so wiring to
+any GND pad behaves identically. Exactly one of them (`GND`) is `OUT
+LOW` and drives the ground net; the other seven are `UNSET` listeners, so
+a normally-grounded circuit never looks like a multi-driver short.
+`3V3_OUT` keeps the historic "3V3" rail (`OUT HIGH`) so the demo button
+circuit still has a supply; the other non-GPIO pins (VBUS, VSYS, 3V3_EN,
+ADC_VREF, RUN) are ordinary `UNSET` pins with no simulated behavior —
+they exist and participate in wiring, but nothing drives or listens on
+them (no `machine.ADC`/reset simulation yet).
+
+Mismatch flagged rather than silently resolved: **GPIO23, GPIO24, and
+GPIO25 are absent from the engine** — they exist on the RP2040 die
+(QSPI flash + clock) and as the onboard LED, but none is on the exposed
+header, and the official part correctly has no pad for them. The first
+board build (like the older hand-drawn board before it) modeled them as
+if they were exposed; now they are gone from `PicoBoard` entirely, and
+`machine.Pin(23/24/25)` throws "no pin labeled GPIO…" just as the real
+header has no such pin.
+
+Sub-pixel alignment of the overlay pins against the part's own
+connectors is asserted in browser-verify step 1b (board pins GPIO0,
+GPIO15, GPIO16, GPIO17, GPIO28, 3V3_OUT, GND checked against the exact
+extracted coordinates), same as the LED/button offset fix.
+
+---
+
+**`machine.PWM` is a duty-only shim: duty lands on the analog channel, frequency is stored, never simulated**
+
+`machine.PWM` covers duty-cycle control and nothing else. `PWM(Pin)`
+sets the pin `OUT`; `duty_u16()` sets/reads the pin's existing
+`analogValue` channel (0 → 0.0, 65535 → 1.0 — the `value/65535` mapping
+matches MicroPython's duty_u16 semantics), and `deinit()` clears the
+channel back to `null` so the LED falls back to its digital value.
+`freq()` is **stored on the object and never used for timing**: a
+real PWM waveform at a given frequency would need a cycle-accurate
+timing model (per-wavelength state in `tick(dt)`, waveform generation,
+per-peripheral clocks) that no component currently consumes, and the
+LED only needs which brightness to render, not *when* it pulses. Frames
+are the atomic unit; duty is a per-frame render target, so a single
+duty value is correct for the sim. `machine.ADC`, `I2C`, etc. remain
+out of scope. All duty writes are **immediately** visible to the rest of
+the sim and to later Python reads — same constraint as the pull-resistor
+fix — so every `pwmSetup`/`pwmDuty`/`pwmDeinit` bridge call goes
+through `Circuit.resolveNow()`; the worker bridge additionally ticks and
+posts a snapshot in the same turn, mirroring the existing `write` path.
+
+The LED brightness model is the analog-channel fallback: when the LED's
+anode has an `analogValue`, brightness is that value (clamped 0–1) and
+`isOn = brightness > 0`; otherwise brightness is the uniform
+`1.0 / 0.0` from the digital value. `RenderInfo`'s led variant gained
+`brightness: number` (all exact-shape assertions updated). This is a
+script-only feature — there's no manual PWM control in the UI; a loop
+of `duty_u16` + `sleep` (the JSPI/non-blocking path) is the supported
+way to animate brightness.
+
+`wokwi-led` genuinely supports continuous brightness — verified in the
+published package source (`led-element.js`:
+`this.brightness = 1.0`, rendered as glow `opacity = 0.3 +
+brightness*0.7`, light off when `value` false or `brightness <=
+EPSILON`), not assumed from its API. So `LedView` sets both the boolean
+`value` and `brightness` as JS properties via the ref (LitElement reads
+attributes as strings, so `brightness="0.5"` as an attribute would be a
+string — the same reason `value` is a property). No workaround, fake
+glow logic, or vendored CSS needed. The brightness of a real
+`wokwi-led` DOM element and the intermediate snapshot values during a
+fade were both confirmed live in the browser (CDP probe driving the
+real worker: distinct brightness values 0.250 / 0.625 / 1.000 observed,
+with `wokwi-led.brightness` exactly `0.2500038147554742` at
+`duty_u16(16384)`).
 
 ---
 

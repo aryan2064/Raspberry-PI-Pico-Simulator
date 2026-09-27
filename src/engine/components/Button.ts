@@ -18,7 +18,7 @@ import type { Pin } from "../Pin";
 // of a pair behaves identically.
 //
 // The button never drives a net on its own: the classic circuit wires one
-// side to a power rail (e.g. 3V3 -> leg1a) and the other to a GPIO input
+// side to a power rail (e.g. 3V3_OUT -> leg1a) and the other to a GPIO input
 // (e.g. leg2a -> GPIO, with an internal pull-down), so at rest the input
 // reads LOW and while held it is pulled up to the rail by the closed switch.
 //

@@ -57,7 +57,7 @@ private emitSnapshot(): void {
     // the real worker re-reads engine pin ids each tick. No conflict is ever
     // emitted by the fake worker, so conflictedPinIds stays empty.
     const pinLabels: Record<string, string[]> = {
-      pico_board: ["GPIO15", "GPIO16", "GPIO17", "GND", "3V3"],
+      pico_board: ["GPIO15", "GPIO16", "GPIO17", "GND", "3V3_OUT"],
       led: ["anode", "cathode"],
       button: ["leg1a", "leg1b", "leg2a", "leg2b"],
     };
@@ -69,7 +69,7 @@ private emitSnapshot(): void {
           id: c.id,
           renderInfo:
             c.kind === "led"
-              ? { type: "led", isOn: false }
+              ? { type: "led", isOn: false, brightness: 0 }
               : c.kind === "button"
                 ? { type: "button", isPressed: false }
                 : { type: "pico_board" },

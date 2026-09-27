@@ -65,9 +65,10 @@ Represents one connection point on a component.
   currently driving/carrying an analog signal" — deliberately distinct
   from digital `FLOATING`, which applies only to the digital channel. A
   pin can be digitally `FLOATING` while holding a valid `analogValue`,
-  or vice versa. No existing component uses it yet (`LED` is on/off
-  only); it's the settled channel future analog components and the
-  `machine.PWM` shim will build on. See `docs/DECISIONS.md`.
+  or vice versa. `LED.update()` is now its first consumer: a non-null
+  anode `analogValue` becomes the LED's clamped brightness, with the
+  digital HIGH/LOW uniform 1/0 as the fallback (see `machine.Pin`
+  semantics below and `docs/DECISIONS.md`).
 - `netId` — which net (group of connected pins) this pin currently
   belongs to. Set by `Circuit.resolveNets()`.
 - `hasConflict` — `boolean`, default `false`. Diagnostic flag set by
@@ -277,8 +278,8 @@ implement this when actually building the first sensor component — see
   the shim bridge as `canRunSync`; where it is false the shim falls back
   to the historical busy-wait `time.sleep` (see `` `machine.Pin`
   semantics and limits``).
-- The `machine` module (specifically `machine.Pin` first, later
-  `machine.PWM`, `machine.ADC`, `machine.I2C` as needed) is shimmed:
+- The `machine` module — `machine.Pin` done, `machine.PWM` done (duty
+  only), `machine.ADC`, `machine.I2C` etc. still deferred — is shimmed:
   user calls like `machine.Pin(15, machine.Pin.OUT)` and
   `.value(1)` map directly onto reading/writing the corresponding
   `Pin` object on the `PicoBoard` component in the engine layer. User
@@ -353,7 +354,10 @@ never moves a placed part.
 ### `machine.Pin` semantics and limits
 
 - `machine.Pin(id, machine.Pin.IN|OUT, machine.Pin.PULL_UP|PULL_DOWN?)`
-  maps id → board GPIO (`GPIO0..GPIO28`); the optional third argument
+  maps id → board GPIO (`GPIO0..GPIO22`, `GPIO26..GPIO28` — the 26 pins
+  actually exposed on the real 40-pin header; GP23/24/25 are not exposed
+  on the board and have no engine pins, so `machine.Pin(23)` etc. throw);
+  the optional third argument
   sets the pin's internal pull (anything omitted/null →
   no pull). The shim's bridge calls `CircuitHost.setupPin`, which — like
   the app's own setup-pin replay path — applies mode/pull then calls
@@ -362,6 +366,26 @@ never moves a placed part.
   (`OUT`) the pin's `PinValue`. Writes go through the bridge to
   `CircuitHost.writePin` and immediately `tick()` the circuit, so a wired
   LED lights without the frame loop running.
+
+`machine.PWM(pin)` builds directly on the analog channel: it flips the
+pin OUT, then `duty_u16(value)` writes `value/65535` onto the engine
+pin's `analogValue` (read with no argument returns the pin's current
+duty), and `deinit()` clears it back to `null`. `freq()` is stored on the
+Python object and deliberately never used for timing — the sim animates
+in frames and LED brightness is a per-frame render target, so a single
+duty value is the correct representation; there is no waveform timing.
+Each duty transition is immediately visible to the sim and to later
+Python reads because the host bridge methods (`initPwm`,
+`setAnalogDuty`, `deinitPwm` in `worker-core.ts`) call
+`Circuit.resolveNow()` — the same immediacy requirement as the pull
+fix — and the worker bridge entries (`pwmSetup`/`pwmDuty`/`pwmDeinit`)
+tick + post a snapshot in the same turn, mirroring the `write` path.
+Consumers pick up the duty through the analog propagation step:
+`LED.update()` treats a non-null anode `analogValue` as its clamped
+brightness (digital HIGH/LOW is the uniform 1/0 fallback) and
+`LedView` sets both `value` and `brightness` on the real `wokwi-led`
+(attribute-passing won't work for a 0..1 prop, so both go in via the
+ref as JS properties).
 
 ### The UI render layer (published `@wokwi/elements` + scaled HTML stage)
 
@@ -381,10 +405,20 @@ Two structural choices from the wokwi-visuals + pin-layout milestones:
    markers above the bodies. Both overlays carry the **same `transform:
    scale()` (with `transform-origin: top-left`) as the stage**, so SVG
    user coordinates stay in stage units throughout. Each marker sits at
-   its body origin + the element-source pin offset (LED anode
-   `(25,42)` / cathode `(15,42)`; button `1.l(0,13)` / `1.r(67,13)` /
-   `2.l(0,32)` / `2.r(67,32)`; board GPIO0–28 `x = 14 + i*10`, `3V3`
-   at 304, `GND` at 314, `y = BOARD_H - 8 = 112`). A previous version
+its body origin + the component pin offset (LED anode
+`(25,42)` / cathode `(15,42)`; button `1.l(0,13)` / `1.r(67,13)` /
+     `2.l(0,32)` / `2.r(67,32)`; board pins sit on the part's own
+    16-stage-unit-pitch grid (0.100" pads at 0.16 stage units per
+    Fritzing unit)
+    across the two long edges, **extracted from the official part's own
+    connector markup** (`GPIO0` `(21.21,10.15)` … `GPIO15` `(325.22,10.08)`
+    top, `GPIO16` `(21.22,122.08)` … `GND` `(53.22,122.08)` /
+    `3V3_OUT` `(85.22,122.08)` / `VBUS` `(325.22,122.08)` bottom), with
+    every one of the 40 header pads now mapped. The pin labels follow
+    the **real Raspberry Pi Pico pinout** (Zephyr `rpi-pico` binding), not
+    the part's connector ids — the two differ on the right column, and the
+    first board build used the ids for labels, placing its right-column
+    markers a few pads off the true positions (see `docs/DECISIONS.md`). A previous version
    left the overlays unscaled, so every marker and wire endpoint
    rendered ~`1/scale − 1` away from its body at any zoom — the fix
    snaps them to sub-pixel agreement (asymptotically asserting in
@@ -406,15 +440,31 @@ Two structural choices from the wokwi-visuals + pin-layout milestones:
    (`src/vendor/wokwi/`) was evaluated and reverted as unnecessary — the
    package ships pre-compiled JS (`__decorate` output), so tsconfig
    settings like `useDefineForClassFields` never execute against it; see
-   `docs/DECISIONS.md`. Pin geometry comes from the elements' `pinInfo`,
-   verified identical between published `1.9.2` and the source clone
-   that informed the offsets. The Pico board has no Wokwi element, so it
-   stays a hand-drawn SVG (`PicoBoardView`), mounted inside a sized
-   `<svg>` wrapper on the stage. See `docs/COMPONENT_GUIDE.md` for the
-   visual representations.
-- `machine.PWM`, `machine.ADC`, `machine.I2C`, and `machine.time` beyond
-  `sleep()` are **out of scope for now** — importing them
-  raises a normal Python `ImportError`, surfaced to the output panel.
+`docs/DECISIONS.md`. Pin geometry comes from the elements' `pinInfo`,
+    verified identical between published `1.9.2` and the source clone
+    that informed the offsets. The Pico board has no Wokwi element, so it
+    is a static SVG: Raspberry Pi's **official Fritzing breadboard part**
+    for the original Pico (`Pico-R3-Fritzing.fzpz` →
+    `svg.breadboard.rpi_pico-tht_1_breadboard.svg`, from
+    `https://pip.raspberrypi.com/documents/RP-008310-DS`), adopted as
+    `src/ui/assets/pico-breadboard.svg` with only the root `svg` dims
+    rewritten and the drawing group given the baked-in
+    `matrix(0 0.16 0.16 0 0 0)` (landscape, USB right, 0.16 stage units
+    per Fritzing unit) — rendered by `PicoBoardView` as a bare `<image>`
+    inside a sized wrapper, with pin-offset coordinates drawn from the
+    part's own `connector{N}pin` circles through that same matrix.
+    The engine `PicoBoard` mirrors every one of the 40 header pads:
+    26 GPIOs (GP0..GP22, GP26..GP28), 8 GND pads tied as one ground plane
+    via `HasInternalConnections` (single `OUT LOW` driver at `GND`), and
+    the non-GPIO pins (VBUS/VSYS/3V3_EN/3V3_OUT/ADC_VREF/RUN). GPIO23/24/25
+    deliberately render no marker (RP2040-internal + onboard LED; no
+    connector in the part and not exposed on the header). See
+   `docs/COMPONENT_GUIDE.md` for the visual representations.
+- `machine.PWM` (duty only; `freq()` stored, never timed),
+  `machine.ADC`, `machine.I2C`, and `machine.time` beyond
+  `sleep()` — PWM is built, the rest are **out of scope for now** —
+  importing the unimplemented ones raises a normal Python
+  `ImportError`, surfaced to the output panel.
 - `time.sleep()` is non-blocking where JSPI (stack switching) is
   available: the shim calls
   `pyodide.ffi.run_sync(asyncio.sleep(seconds))`, which suspends the

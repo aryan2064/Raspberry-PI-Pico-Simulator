@@ -1,4 +1,4 @@
-# Roadmap
+w# Roadmap
 
 ## Agreed build order
 
@@ -14,10 +14,11 @@
    detail).
 3. **Code execution** — Pyodide in a Web Worker, `machine.Pin` shim
    reading/writing `PicoBoard` pins. ✅ Built & verified (see "Code
-   execution" under Current status detail). Limits: Pin-only shim,
-   non-cooperative Stop-by-replay; `time.sleep` is non-blocking where
-   JSPI exists else busy-wait; `machine.PWM`,
-   `ADC`, `I2C`, pause/step debugging still open.
+   execution" under Current status detail). Limits: non-cooperative
+   Stop-by-replay; `time.sleep` is non-blocking where JSPI exists else
+   busy-wait; `machine.PWM` (duty only) is now built on the analog
+   channel (see below under Current status detail), while `ADC`, `I2C`,
+   pause/step debugging still open.
 4. **Component palette / drag editing** — user-placed parts: drop a
    palette component onto the canvas, drag it around, then wire it like
    the demo parts. ✅ Built & verified (see "Component palette + drag"
@@ -82,9 +83,10 @@ before deciding to skip ahead again.
     `setInterval(..., 1000/60)` calling `circuit.tick(1/60)` then
     bumping a frame counter to re-render.
   - `components/LedView.tsx`, `PicoBoardView.tsx`, `ButtonView.tsx` —
-    purely presentational SVG bodies (pin markers are drawn centrally by
+    purely presentational component bodies (pin markers are drawn centrally by
     `CircuitCanvas` in the pins layer, off the `PIN_OFFSETS` maps each
-    view exports). `ButtonView` is the
+    view exports; `PicoBoardView` additionally renders the official
+    Fritzing board SVG). `ButtonView` is the
     one documented exception to pure presentation: it calls
     `component.press()` / `component.release()` on the body
     mousedown/mouseup so the button behaves like the real thing.
@@ -115,7 +117,7 @@ before deciding to skip ahead again.
     passing).
   - Demo (`src/App.tsx`): two independent demo nets so the interactive
     and Python demos never fight — *button → `GPIO15` → LED* (press and
-    hold the green button to light it; closing the button ties 3V3 onto
+    hold the green button to light it; closing the button ties 3V3_OUT onto
     the GPIO15 pull-down net) and *LED2 anode ↔ `GPIO16`* (driven by the
     default MicroPython blink script; cathode → GND). Board GPIO pins
     default to `UNSET` mode (GPIO15 is configured `IN` + internal
@@ -181,8 +183,10 @@ before deciding to skip ahead again.
     clean; `npm run verify:python` runs the **real Pyodide** (npm
     package) against the real `machine-shim.py` + `CircuitHost` in Node
     — machine.Pin drives a wired LED on/off, IN pins read correctly,
-    busy-wait `time.sleep` actually blocks, stdout routes, and
-    out-of-scope `machine.PWM` raises a clean ImportError. Real-browser
+    busy-wait `time.sleep` actually blocks, stdout routes, an
+    out-of-scope import now raises a clean ImportError via
+    `machine.ADC`, and a `machine.PWM` block runs a `duty_u16` sweep +
+    fade `sleep` loop against the real engine. Real-browser
     coverage is automated too: `node scripts/browser-verify.mjs
     <url>` drives headless Edge over CDP through canvas-render, button
     relay, Run-blinking-LED2, and Stop-mid-`while True` recovery — run
@@ -252,7 +256,8 @@ before deciding to skip ahead again.
   ids as conflicted; disconnect clears them), 3 canvas tests
   (single-wire banner, plural banner, clear-on-resolve), all green in
   `npm test` (60 passed + 1 skipped at the time; the demo's browser step
-  now uses a 3V3↔GND short — pressing a button can merge two
+  now uses a 3V3 (since the real-pinout rework, `3V3_OUT`)↔GND short —
+  pressing a button can merge two
   already-conflicting nets, and the button *itself* can never create one
   — see `scripts/browser-verify.mjs` step 7), typecheck + build clean.
 
@@ -276,8 +281,15 @@ before deciding to skip ahead again.
   CSS-transform scaled from a ResizeObserver) with component bodies as
   real DOM underneath SVG wire/pin overlays (`data-layer="wires"|"pins"`,
   `pointer-events:none` svgs), and all drop/drag math routed through
-  `clientToStagePoint()`. The board stays a hand-drawn SVG (no Wokwi
-  element exists for it). See `docs/DECISIONS.md`; verified by 2
+  `clientToStagePoint()`. The board is a static SVG of Raspberry Pi's
+  official Fritzing breadboard part for the original Pico
+  (`Pico-R3-Fritzing.fzpz` → `svg.breadboard.rpi_pico-tht_1_breadboard.svg`,
+  from `https://pip.raspberrypi.com/documents/RP-008310-DS`), adopted
+  as `src/ui/assets/pico-breadboard.svg` with the root dims rewritten
+  and a baked-in `matrix(0 0.16 0.16 0 0 0)` for landscape/USB-right at
+  0.16 stage units per Fritzing unit; `picoPinOffsets` are extracted
+  from the part's own `connector{N}pin` circles (no Wokwi board element
+  exists). See `docs/DECISIONS.md`; verified by 2
   engine tests (demo button circuit / pull conflict), 5 CircuitHost
   tests (setupPin pulls, `setupPin` message, bridge pull forwarding),
   updated canvas/App tests, `npm run typecheck`, `npm test` (72
@@ -288,9 +300,11 @@ before deciding to skip ahead again.
 
 - `README.md` maintained at project root with current status and run
   instructions. Keep it updated as work progresses.
-- Next up: remaining validation/error states or `machine.PWM` + LED
-  brightness once the analog channel has a consumer (bottom of
-  "Resolved / closed items").
+- Next up: remaining validation/error states, `machine.ADC`/analog
+  *input*, or `I2C` — `machine.PWM` + LED brightness and the **real
+  40-pin board header** are **done** (see
+  the "Resolved / closed items" section below and "Current status
+  detail").
 
 ## Explicit anti-patterns (already discussed and rejected — don't reintroduce)
 
@@ -337,8 +351,10 @@ before deciding to skip ahead again.
   not just react statelessly each `update()` call. No component
   needing this exists yet, but `update(dt)` already takes a `dt`
   parameter in anticipation of timing-based logic.
-- Python execution limits (see DECISIONS): `machine.PWM`/`ADC`/`I2C`
-  raise ImportError on purpose; `time.sleep` is non-blocking where JSPI
+- Python execution limits (see DECISIONS): `machine.ADC`/`I2C` still
+  raise ImportError on purpose (PWM now works — see the resolved
+  section); `machine.PWM` stores `freq()` but never simulates timing
+  (duty only); `time.sleep` is non-blocking where JSPI
   (stack switching) is available — Chrome/Edge — and busy-waits otherwise
   (Firefox has no JSPI, so the sim pauses mid-sleep); a precise
   *wakeable* sleep — interrupt it from the main thread mid-sleep — would
@@ -366,7 +382,11 @@ before deciding to skip ahead again.
   SVG wire/pin overlays scaled identically, so pin markers sit exactly
   on each element's `pinInfo` offsets (asserted in browser-verify
   step 1b) and the demo LED glows from within its shadow DOM. The board
-  stays hand-drawn (no Wokwi element exists). See `docs/DECISIONS.md`
+  is Raspberry Pi's official Fritzing breadboard part for the original
+  Pico, adopted as a static SVG asset
+  (`Pico-R3-Fritzing.fzpz/svg.breadboard.rpi_pico-tht_1_breadboard.svg`
+  from `https://pip.raspberrypi.com/documents/RP-008310-DS`); no Wokwi
+  element exists for it. See `docs/DECISIONS.md`
   and `docs/ARCHITECTURE.md`.
 - **Deleting placed components — done.** `Circuit.removeComponent`
   (boarding-cascade), the `removeComponent` worker message (board
@@ -388,7 +408,37 @@ before deciding to skip ahead again.
   to all `IN` pins; none → `null`; multiple drivers → `null` placeholder,
   mirroring the digital conflict case). Covered by Vitest tests in
   `src/engine/__tests__/Analog.test.ts`. See `docs/DECISIONS.md`.
-- **Still pending, deliberately separate from the above:** implementing
-  `machine.PWM` itself, and adding brightness behavior to `LED`. The
-  analog channel exists so those features have something to build on —
-  it does not implement them.
+- **`machine.PWM` + LED brightness — done.** `PWM` in `machine-shim.py`
+  (`duty_u16()` sets/reads a pin's analog channel as `value/65535`; the
+  constructor flips the pin `OUT`; `deinit()` clears the channel; `freq()`
+  stored, never timed) drives the engine's existing analog channel through
+  `host.initPwm`/`setAnalogDuty`/`deinitPwm` (`resolveNow()`, so duty is
+  immediately visible like the pull fix) and the worker bridge
+  (`pwmSetup`/`pwmDuty`/`pwmDeinit`, tick + snapshot each call).
+  `LED.update()` maps an anode `analogValue` to a clamped `brightness`
+  (`RenderInfo` led variant = `{ type, isOn, brightness }`, digital
+  HIGH/LOW uniform 1/0 fallback) and `LedView` sets both `value` and
+  `brightness` on the real `wokwi-led` — a genuine capability, verified
+  in the package source. A duty sweep + fade `sleep` loop runs against
+  real Pyodide in `npm run verify:python`, and a CDP probe on the live
+  app observed intermediate brightness on the DOM
+  (0.250/0.625/1.000, `wokwi-led.brightness` exactly
+  0.2500038147554742 at `duty_u16(16384)`). Script-only; no manual UI
+  PWM control. See `docs/DECISIONS.md`.
+- **Real Pico header pinout on the board — done.** `PicoBoard` models
+  all 40 physical header pins: 26 GPIOs (GPIO0..GPIO22, GPIO26..GPIO28),
+  eight GND pads tied as one plane via `HasInternalConnections`
+  (single `GND` `OUT LOW` driver + seven `UNSET` listeners), `3V3_OUT`
+  (keeps the historic "3V3" `OUT HIGH` rail), and VBUS/VSYS/3V3_EN/
+  ADC_VREF/RUN as wireable-but-inert `UNSET` pins. GP23/24/25 removed
+  (not on the header). Every marker now sits on its true pad — the
+  right-column labels follow connector↔pin identity (connector20 = pin21
+  VBUS … connector39 = pin40 GPIO16), not the old reduced set that drew
+  its right-column markers a few pads off. Engine-behavior note: an
+  `UNSET` pin on a driven net still reads FLOATING until set `IN`.
+  Verified by 7 new PicoBoard engine tests, relabeled
+  LED/Button/CircuitHost/App/canvas tests, typecheck + build, real
+  Pyodide, and browser-verify step 1b (sub-pixel pin geometry on all
+  checked pads) + step 7 (`3V3_OUT`↔GND). See `docs/DECISIONS.md`.
+
+---

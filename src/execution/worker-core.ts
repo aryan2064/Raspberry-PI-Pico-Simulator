@@ -216,4 +216,31 @@ export class CircuitHost {
     const pin = this.board().pin(`GPIO${gpio}`);
     pin.value = value === 0 ? "LOW" : "HIGH";
   }
+
+  // ---- machine.PWM bridge (same thread) ----
+  //
+  // machine.PWM drives the engine's analogValue channel (0..1) through the
+  // same duty-width range real MicroPython uses (0..65535 scaled down).
+  // Every write resolves nets immediately — the LED's anode must already
+  // carry the new value when the Python call returns, not on the next 60fps
+  // tick; that is the same immediacy requirement as the pull-resistor fix.
+
+  // Creating a PWM puts the pin in OUT mode (real Pico behavior).
+  initPwm(gpio: number): void {
+    const pin = this.board().pin(`GPIO${gpio}`);
+    pin.mode = "OUT";
+    this.circuit.resolveNow();
+  }
+
+  setAnalogDuty(gpio: number, duty: number): void {
+    const pin = this.board().pin(`GPIO${gpio}`);
+    pin.analogValue = duty;
+    this.circuit.resolveNow();
+  }
+
+  deinitPwm(gpio: number): void {
+    const pin = this.board().pin(`GPIO${gpio}`);
+    pin.analogValue = null;
+    this.circuit.resolveNow();
+  }
 }

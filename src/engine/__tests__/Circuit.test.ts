@@ -19,7 +19,7 @@ describe("Circuit net resolution", () => {
     circuit.resolveNets();
     circuit.tick(1 / 60);
     // anode has no driver -> floating -> LED off
-    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: false });
+    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: false, brightness: 0 });
   });
 
   it("turns the LED on when the driver pin is driven HIGH", () => {
@@ -31,7 +31,7 @@ describe("Circuit net resolution", () => {
     board.pin("GPIO15").value = "HIGH";
 
     circuit.tick(1 / 60);
-    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: true });
+    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: true, brightness: 1 });
   });
 
   it("turns the LED off when the driver pin is driven LOW", () => {
@@ -42,7 +42,7 @@ describe("Circuit net resolution", () => {
     board.pin("GPIO15").value = "LOW";
 
     circuit.tick(1 / 60);
-    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: false });
+    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: false, brightness: 0 });
   });
 
   it("resolves a net with multiple drivers to FLOATING (known gap placeholder)", () => {
@@ -58,7 +58,7 @@ describe("Circuit net resolution", () => {
 
     circuit.tick(1 / 60);
     // Conflict placeholder resolves to FLOATING, so LED stays off.
-    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: false });
+    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: false, brightness: 0 });
   });
 
   it("propagates a net value through an intermediate net (transitive wiring)", () => {
@@ -69,7 +69,7 @@ describe("Circuit net resolution", () => {
     board.pin("GPIO15").mode = "OUT";
     board.pin("GPIO15").value = "HIGH";
     circuit.tick(1 / 60);
-    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: true });
+    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: true, brightness: 1 });
   });
 
   it("disconnects a wire so its pins are no longer in the same net", () => {
@@ -80,14 +80,14 @@ describe("Circuit net resolution", () => {
     board.pin("GPIO15").mode = "OUT";
     board.pin("GPIO15").value = "HIGH";
     circuit.tick(1 / 60);
-    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: true });
+    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: true, brightness: 1 });
 
     // Remove the wire and re-resolve. The anode is now in a driverless net,
     // so driving GPIO15 no longer affects it — LED stays off.
     circuit.disconnect(wire.id);
     circuit.resolveNets();
     circuit.tick(1 / 60);
-    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: false });
+    expect(led.getRenderInfo()).toEqual({ type: "led", isOn: false, brightness: 0 });
     expect(circuit.wires).toHaveLength(0);
   });
 
@@ -345,8 +345,8 @@ describe("Circuit HasInternalConnections (dynamic net merge/split)", () => {
     expect(button.pin("leg1a").netId).not.toBe(button.pin("leg2a").netId);
   });
 
-  it("HasInternalConnections does not create conflicts — 3V3 + button short is single-driver", () => {
-    circuit.connect(board.pin("3V3"), button.pin("leg1a"));
+  it("HasInternalConnections does not create conflicts — 3V3_OUT + button short is single-driver", () => {
+    circuit.connect(board.pin("3V3_OUT"), button.pin("leg1a"));
     circuit.connect(button.pin("leg2a"), board.pin("GPIO15"));
     circuit.resolveNets();
     board.pin("GPIO15").mode = "IN";
@@ -354,10 +354,10 @@ describe("Circuit HasInternalConnections (dynamic net merge/split)", () => {
 
     button.press();
     circuit.tick(1 / 60);
-    // 3V3 is the only OUT driver; button is passive; GPIO15 is IN.
+    // 3V3_OUT is the only OUT driver; button is passive; GPIO15 is IN.
     // One driver -> no conflict.
     expect(board.pin("GPIO15").value).toBe("HIGH");
     expect(board.pin("GPIO15").hasConflict).toBe(false);
-    expect(board.pin("3V3").hasConflict).toBe(false);
+    expect(board.pin("3V3_OUT").hasConflict).toBe(false);
   });
 });

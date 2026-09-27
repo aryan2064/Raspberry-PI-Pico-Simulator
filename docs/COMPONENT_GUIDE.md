@@ -96,15 +96,20 @@ you haven't — this doc assumes you understand `Pin`, `Component`, and
    component. **Default: use the published `@wokwi/elements` package.**
    Where it ships an authentic part (`wokwi-led`, `wokwi-pushbutton`),
    the view wraps it (boolean props via refs — see
-   `LedView.tsx`/`ButtonView.tsx`); otherwise it stays a hand-drawn SVG
-   like `PicoBoardView.tsx`. Per `docs/DECISIONS.md`, only vendor source
+   `LedView.tsx`/`ButtonView.tsx`); otherwise it renders its own static
+   SVG like `PicoBoardView.tsx` does (the board uses Raspberry Pi's
+   official Fritzing part, adopted as a repo asset). Per
+   `docs/DECISIONS.md`, only vendor source
    as a last resort if a real, confirmed blocker is found — and in that
    case document the specific blocker in `docs/DECISIONS.md`, not just
    "it didn't work." Each view also exports its
    pin anchor offsets (`PinOffsetMap`, stage coordinates the canvas
    needs for wire and pin rendering — take the part's offsets from the
    element's `pinInfo`, mirroring its flip/geometry, as
-   `LedView`/`ButtonView` do) and keeps a stable outer
+`LedView`/`ButtonView` do; a static-SVG part with no wokwi element,
+    like the board, extracts them from its asset's own geometry (the
+    official part's `connector{N}pin` circles) mapped through the same
+    transform the artwork ships with — see `PicoBoardView.tsx`) and keeps a stable outer
    `data-testid` plus `data-selected`/state attrs for tests.
    `renderComponentView` in `CircuitCanvas.tsx` switches on
    `renderInfo.type`, and `ComponentPalette.tsx` mirrors identical
@@ -153,7 +158,7 @@ you haven't — this doc assumes you understand `Pin`, `Component`, and
 - [ ] Pins added with clear, meaningful `label`s and correct mode (`IN`/`OUT`/`UNSET`)
 - [ ] Implemented `update(dt)` and `getRenderInfo()`
 - [ ] Passive switch? Implements `HasInternalConnections`, not pin-driving
-- [ ] Added a view (`wokwi` element or hand-drawn SVG) with pin offsets + state testids
+- [ ] Added a view (`wokwi` element or static SVG, official part where one exists) with pin offsets + state testids
 - [ ] Wired `renderComponentView` + palette preview
 - [ ] Considered whether `HasStimulus<T>` applies
 - [ ] Considered whether cross-tick state is needed

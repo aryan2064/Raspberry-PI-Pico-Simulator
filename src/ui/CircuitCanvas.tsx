@@ -6,7 +6,12 @@ import type { PinMarkerStyle, PinOffsetMap, Vec } from "./types";
 import { COMPONENT_MIME } from "./ComponentPalette";
 import { ButtonView, buttonPinOffsets } from "./components/ButtonView";
 import { LedView, ledPinOffsets } from "./components/LedView";
-import { PicoBoardView, picoPinOffsets } from "./components/PicoBoardView";
+import {
+  PicoBoardView,
+  picoPinOffsets,
+  PICO_BOARD_W,
+  PICO_BOARD_H,
+} from "./components/PicoBoardView";
 
 // One entry per RenderInfo variant. Adding a new component type means adding
 // a key here — a compile error if forgotten, same as in the render switch.
@@ -45,10 +50,10 @@ const DRAG_THRESHOLD = 4;
 const STAGE_W = 1200;
 const STAGE_H = 700;
 
-// The PicoBoard view is still a hand-drawn SVG (no wokwi board element
-// exists); it is hosted in its own svg wrapper sized to its intrinsic dims.
-const PICO_BOARD_W = 320;
-const PICO_BOARD_H = 120;
+// The PicoBoard view is Raspberry Pi's official Fritzing breadboard SVG for
+// the original Pico (static asset, dims re-derived from the part's own
+// connector markup); it is hosted in its own svg wrapper sized to its
+// intrinsic dims (333.86x132.29, ~2.5:1) from PicoBoardView's exports.
 
 function clientToStagePoint(
   stage: HTMLElement | null,
