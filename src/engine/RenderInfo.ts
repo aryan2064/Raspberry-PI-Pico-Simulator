@@ -7,4 +7,6 @@
 export type RenderInfo =
   | { type: "led"; isOn: boolean; brightness: number }
   | { type: "button"; isPressed: boolean }
+  | { type: "relay"; energized: boolean }
+  | { type: "transistor"; conducting: boolean }
   | { type: "pico_board" };

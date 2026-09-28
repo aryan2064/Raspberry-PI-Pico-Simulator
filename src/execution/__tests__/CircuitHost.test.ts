@@ -57,6 +57,32 @@ describe("CircuitHost (worker-side message handling)", () => {
     expect(snapshot(host).components).toHaveLength(3);
   });
 
+  it("adds relay and transistor components and exposes their state pins in snapshots", () => {
+    addDemoBoard(host);
+    host.handleEdit({ type: "addComponent", componentId: "relay", kind: "relay" });
+    host.handleEdit({ type: "addComponent", componentId: "transistor", kind: "transistor" });
+    const comps = snapshot(host).components;
+    expect(comps.map((c) => c.id)).toEqual(["board", "led", "button", "relay", "transistor"]);
+    expect(comps.find((c) => c.id === "relay")!.renderInfo).toEqual({ type: "relay", energized: false });
+    expect(comps.find((c) => c.id === "transistor")!.renderInfo).toEqual({
+      type: "transistor",
+      conducting: false,
+    });
+    expect(comps.find((c) => c.id === "relay")!.pins.map((p) => p.label)).toEqual([
+      "in",
+      "vcc",
+      "gnd",
+      "com",
+      "no",
+      "nc",
+    ]);
+    expect(comps.find((c) => c.id === "transistor")!.pins.map((p) => p.label)).toEqual([
+      "base",
+      "collector",
+      "emitter",
+    ]);
+  });
+
   it("drives a connected LED via the machine.Pin bridge (same thread)", () => {
     addDemoBoard(host);
     connect(host, "w1", "board", "GPIO15", "led", "anode");

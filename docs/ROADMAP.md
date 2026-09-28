@@ -36,8 +36,11 @@ w# Roadmap
    Python pin numbers, etc.).
 6. **Expand component library** — add components one at a time, as
    actually needed by a feature or example being built, not
-   speculatively. ◐ Beyond `LED` only by `Button` (see "Current status
-   detail" — built for a stated, concrete reason). Not otherwise
+   speculatively. ◑ Beyond `LED`/`Button`: `Relay` + `Transistor`
+   added (see "Resolved / closed items") — two more *state-driven
+   passive switches* exercising
+   `HasInternalConnections`, built for the stated reason of proving
+   input-driven net switching. Not otherwise
    started.
 
 Work should generally proceed in this order. Skipping ahead (e.g.
@@ -301,8 +304,9 @@ before deciding to skip ahead again.
 - `README.md` maintained at project root with current status and run
   instructions. Keep it updated as work progresses.
 - Next up: remaining validation/error states, `machine.ADC`/analog
-  *input*, or `I2C` — `machine.PWM` + LED brightness and the **real
-  40-pin board header** are **done** (see
+  *input*, or `I2C` — `machine.PWM` + LED brightness, the **real
+  40-pin board header**, and the **Relay + Transistor switches** are
+  **done** (see
   the "Resolved / closed items" section below and "Current status
   detail").
 
@@ -440,5 +444,29 @@ before deciding to skip ahead again.
   LED/Button/CircuitHost/App/canvas tests, typecheck + build, real
   Pyodide, and browser-verify step 1b (sub-pixel pin geometry on all
   checked pads) + step 7 (`3V3_OUT`↔GND). See `docs/DECISIONS.md`.
+- **Relay + Transistor — done.** Two more passive switches, both
+  state-driven `HasInternalConnections` (the Button pattern with an
+  IN-mode control pin replacing the user gesture). Relay
+  (`in/vcc/gnd/com/no/nc`): SPDT contact resolves to exactly
+  `[com,no]` when `in===HIGH`, `[com,nc]` otherwise — always one pair,
+  never both, so energizing demonstrably breaks the old nc path.
+  Transistor (`base/collector/emitter`): `[collector,emitter]` only
+  while `base===HIGH`, else `[]` (cutoff on LOW *or* FLOATING). Both
+  have their control decision flip in `update()`, so a net change
+  reaches the contacts on the second `tick()` — see `docs/DECISIONS.md`
+  for the timing rule and the vcc/gnd-inert + no-base-resistor/Vbe
+  simplifications. Views are hand-drawn SVG (`RelayView.tsx` 140×52
+  screw-terminal module; `TransistorView.tsx` TO-92-style, BC547 lead
+  order) because the only relay in `@wokwi/elements` 1.9.2
+  (`wokwi-ks2e-m-dc5`) is a bare 8-pad DPDT contactor whose geometry
+  can't express the module's `in` pin (and no transistor element
+  exists at all — see `docs/DECISIONS.md`). Canvas PIN_OFFSETS/PIN_STYLE/
+  render cases + drop acceptance and worker `addComponent` cases wired;
+  palette offers LED/Button/Relay/Transistor. Verified by 9 new engine
+  tests (driving control pins over real wires + settled-state and
+  old-contact-break asserts), 1 CircuitHost snapshot/pins test, 2
+  canvas tests (state attrs + relay/transistor drops), updated App
+  palette test — 104 passing + 1 skipped total, typecheck + build
+  clean, end-to-end switching confirmed in browser-verify step 9.
 
 ---

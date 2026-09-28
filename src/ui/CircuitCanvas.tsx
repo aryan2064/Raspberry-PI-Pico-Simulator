@@ -6,6 +6,8 @@ import type { PinMarkerStyle, PinOffsetMap, Vec } from "./types";
 import { COMPONENT_MIME } from "./ComponentPalette";
 import { ButtonView, buttonPinOffsets } from "./components/ButtonView";
 import { LedView, ledPinOffsets } from "./components/LedView";
+import { RelayView, relayPinOffsets } from "./components/RelayView";
+import { TransistorView, transistorPinOffsets } from "./components/TransistorView";
 import {
   PicoBoardView,
   picoPinOffsets,
@@ -18,12 +20,16 @@ import {
 const PIN_OFFSETS: Record<RenderInfo["type"], PinOffsetMap> = {
   led: ledPinOffsets,
   button: buttonPinOffsets,
+  relay: relayPinOffsets,
+  transistor: transistorPinOffsets,
   pico_board: picoPinOffsets,
 };
 
 const PIN_STYLE: Record<RenderInfo["type"], PinMarkerStyle> = {
   led: { r: 5, fill: "#888", stroke: "#555" },
   button: { r: 5, fill: "#888", stroke: "#555" },
+  relay: { r: 5, fill: "#888", stroke: "#555" },
+  transistor: { r: 5, fill: "#888", stroke: "#555" },
   pico_board: { r: 4, fill: "#d8b03c", stroke: "#4a3a0a" },
 };
 
@@ -104,6 +110,10 @@ function renderComponentView(
           onRelease={() => onRelease(componentId)}
         />
       );
+    case "relay":
+      return <RelayView key={componentId} renderInfo={renderInfo} selected={selected} />;
+    case "transistor":
+      return <TransistorView key={componentId} renderInfo={renderInfo} selected={selected} />;
     case "pico_board":
       return (
         <svg
@@ -344,7 +354,16 @@ export function CircuitCanvas({
     e.preventDefault();
     setDraggingOver(false);
     const kind = e.dataTransfer?.getData(COMPONENT_MIME) as ComponentKind | "";
-    if (kind !== "led" && kind !== "button") return; // not a palette drop
+    if (!kind) return; // not a palette drop
+    switch (kind) {
+      case "led":
+      case "button":
+      case "relay":
+      case "transistor":
+        break;
+      default:
+        return; // e.g. non-palette payloads must not be placed
+    }
     onPlaceComponent(clientToStagePoint(stageRef.current, e.clientX, e.clientY), kind);
   }
 

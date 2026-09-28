@@ -89,9 +89,9 @@ that's the one rule this project cannot bend on. See
       (real-Pyodide end-to-end; run with `npm run verify:python`).
       `src/test/setup.ts` patches jsdom's missing `crypto.randomUUID`
       (the engine's `newId()`), registered via `test.setupFiles`.
-      Current totals: **92 passing + 1 skipped** (18 Circuit / 7
-      PicoBoard / 6 LedBrightness / 4 analog / 6 button / 19 CircuitHost /
-      23 canvas /
+      Current totals: **104 passing + 1 skipped** (18 Circuit / 7
+      PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
+      4 transistor / 20 CircuitHost / 25 canvas /
       9 App; Pyodide.integration skipped by default — run it with
       `npm run verify:python`).
 - [x] Analog value channel on `Pin` (`analogValue: number | null`, 0–1
@@ -203,8 +203,9 @@ that's the one rule this project cannot bend on. See
       pauses the worker for the sleep duration). See DECISIONS.
 - [x] Component palette + drag interaction
       (`src/ui/ComponentPalette.tsx`, `src/App.tsx`,
-      `src/App.test.tsx`): the palette offers LED and Button (no second
-      board — PicoBoard stays a singleton) as HTML5 drag sources; dropping
+`src/App.test.tsx`): the palette offers LED, Button, Relay, and
+       Transistor (no second
+       board — PicoBoard stays a singleton) as HTML5 drag sources; dropping
       on the canvas converts client coords to stage coords via
       `clientToStagePoint()` (`getBoundingClientRect`-based, with a
       client-coords pass-through fallback where no usable rect exists,
@@ -277,9 +278,37 @@ that's the one rule this project cannot bend on. See
       browser-verify step 1b (GPIO16, GPIO28, 3V3_OUT, GND, GPIO17
       sub-pixel against extracted connector coords) + step 7
       (`3V3_OUT`↔GND conflict).
+- [x] `Relay` + `Transistor` components — two more **state-driven
+      passive switches** (the Button's `HasInternalConnections` pattern,
+      with the contact state flipped by an input pin instead of a user
+      gesture). Relay (`src/engine/components/Relay.ts`): pins
+      `in`/`vcc`/`gnd`/`com`/`no`/`nc`; `getInternalConnections()`
+      returns exactly `[com,no]` while `in === "HIGH"` (energized) and
+      `[com,nc]` otherwise — a true SPDT, one pair at a time, so an
+      energize demonstrably *breaks* the old nc path (`vcc`/`gnd` are
+      inert UNSET pins for wiring realism only — no coil model).
+      Transistor (`src/engine/components/Transistor.ts`): pins
+      `base`/`collector`/`emitter`; conducts (`[collector,emitter]`)
+      only while `base === "HIGH"`, `[]` in cutoff (LOW **or**
+      FLOATING) — no base-resistor/Vbe/leakage analog model. Both are
+      MODE_IN control pins, so the state flip lands in `update()` and
+      reaches the contacts on the second tick after the control net
+      changes (see `docs/DECISIONS.md`). Views are **hand-drawn static
+      SVG** (`RelayView.tsx` 140×52 screw-terminal module, `data-
+      energized`; `TransistorView.tsx` TO-92-style, BC547 lead order,
+      `data-conducting`) because `@wokwi/elements` has no usable
+      relay or transistor (the only relay it ships, `wokwi-ks2e-m-dc5`,
+      is a bare 8-pad DPDT contactor with no `in` pin — wrong interface
+      AND wrong visuals — see `docs/DECISIONS.md`). Palette entries,
+      canvas `PIN_OFFSETS`/`PIN_STYLE`/render cases + drop acceptance,
+      and worker `addComponent` cases all wired. Verified by
+      `Relay.test.ts` (5) + `Transistor.test.ts` (4) — driving control
+      pins over real wires, settled-state + old-contact-break asserts —
+      plus CircuitHost snapshot/pins tests, canvas render + drop tests,
+      and updated App palette test.
 - [ ] Validation / error states beyond conflict detection (undeclared
       pins, unmapped Python pin numbers, etc.) — not started.
-- [ ] Component library beyond LED/Button/pulls — not started
+- [ ] Component library beyond LED/Button/Relay/Transistor — not started
       (intentionally; see "Don't pre-build" rule in `docs/ROADMAP.md`)
 
 ## Where to go next

@@ -83,6 +83,23 @@ you haven't — this doc assumes you understand `Pin`, `Component`, and
    that is the hook the net resolver merges/splits nets from on every
    tick. Read `docs/ARCHITECTURE.md` for the full contract.
 
+   **State-driven switches are the same pattern, flipped by an input.**
+   `Relay` (`in/vcc/gnd/com/no/nc`) and `Transistor` (`base/collector/
+   emitter`) also implement `HasInternalConnections`, but instead of
+   `press()`/`release()` flipping a flag, `update()` reads an IN-mode
+   control pin and sets the flag from it: the relay returns exactly
+   `[[com,no]]` when `in === "HIGH"` else `[[com,nc]]` (a true SPDT —
+   always one pair, never both); the transistor returns
+   `[[collector,emitter]]` only while `base === "HIGH"` and `[]` in
+   cutoff (LOW **or** FLOATING). All control-side pins read through a
+   real wire in tests; the flag is never poked directly. Because the
+   flag flips inside `update()`, a control change reaches the contacts
+   on the **second** tick after it lands on the net (`tick()` groups
+   nets before `update()` runs) — assert the settled state after two
+   `tick()`s, and the old-contact break in between. See
+   `Relay.test.ts` / `Transistor.test.ts` (and their `docs/DECISIONS.md`
+   entries) for the walk-through.
+
 3. **Name every pin with a clear `label`.** Use names that will make
    sense both on a rendered canvas and in a `machine`-shim context if
    relevant (e.g. `"anode"`/`"cathode"` for LED, `"leg1a"`/`"leg1b"`/
@@ -138,9 +155,13 @@ you haven't — this doc assumes you understand `Pin`, `Component`, and
    `getRenderInfo()` returns what you expect. Test both the "driven"
    and "undriven/floating" cases where relevant. For a passive switch,
    also test press/release changing net membership without any wire
-   edit. UI tests then assert the new `data-testid`s appear and state
-   attrs flip — position/selection assertions read the body wrapper's
-   `style.left/top`, never `<g transform>` strings.
+   edit. For a **state-driven** switch (relay, transistor), drive the
+   control pin over a wire and assert the settled contact pair after
+   two ticks, plus the old-contact break (e.g. the de-energized nc
+   path's rail disappearing when `in` goes HIGH) — see
+   `Relay.test.ts`. UI tests then assert the new `data-testid`s appear
+   and state attrs flip — position/selection assertions read the body
+   wrapper's `style.left/top`, never `<g transform>` strings.
 
 8. **Do not touch `ui/` or `execution/` to add a component.** If you
    find yourself needing to import something from those layers into
@@ -158,6 +179,7 @@ you haven't — this doc assumes you understand `Pin`, `Component`, and
 - [ ] Pins added with clear, meaningful `label`s and correct mode (`IN`/`OUT`/`UNSET`)
 - [ ] Implemented `update(dt)` and `getRenderInfo()`
 - [ ] Passive switch? Implements `HasInternalConnections`, not pin-driving
+- [ ] State-driven switch? Control pin is MODE_IN, flag set in `update()`, decide between `[pair]` / `[pair]` or `[]` per state
 - [ ] Added a view (`wokwi` element or static SVG, official part where one exists) with pin offsets + state testids
 - [ ] Wired `renderComponentView` + palette preview
 - [ ] Considered whether `HasStimulus<T>` applies

@@ -212,6 +212,38 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     expect(screen.getByTestId("led-body").getAttribute("data-on")).toBe("true");
   });
 
+  it("renders relay and transistor bodies with their contact state attributes", () => {
+    const snapshot: SnapshotMessage = {
+      type: "snapshot",
+      conflictedPinIds: [],
+      components: [
+        { id: "board", renderInfo: { type: "pico_board" }, pins: Array.from({ length: 3 }, (_, i) => ({ id: `board:GPIO${i}`, label: `GPIO${i}` })) },
+        {
+          id: "relay",
+          renderInfo: { type: "relay", energized: false },
+          pins: ["in", "vcc", "gnd", "com", "no", "nc"].map((label) => ({ id: `relay:${label}`, label })),
+        },
+        {
+          id: "transistor",
+          renderInfo: { type: "transistor", conducting: true },
+          pins: ["base", "collector", "emitter"].map((label) => ({ id: `transistor:${label}`, label })),
+        },
+      ],
+    };
+    const positions = { board: { x: 40, y: 40 }, relay: { x: 400, y: 80 }, transistor: { x: 700, y: 80 } };
+    renderCanvas(snapshot, [], {}, positions);
+
+    expect(screen.getByTestId("relay-body").getAttribute("data-energized")).toBe("false");
+    expect(screen.getByTestId("transistor-body").getAttribute("data-conducting")).toBe("true");
+
+    for (const label of ["in", "vcc", "gnd", "com", "no", "nc"]) {
+      expect(screen.getByTestId(`pin-relay-${label}`)).toBeTruthy();
+    }
+    for (const label of ["base", "collector", "emitter"]) {
+      expect(screen.getByTestId(`pin-transistor-${label}`)).toBeTruthy();
+    }
+  });
+
   it("relays button press/release to the worker callbacks", () => {
     const onPress = vi.fn();
     const onRelease = vi.fn();
@@ -314,6 +346,19 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     dropPaletteComponent(svg, "wow", 100, 100);
 
     expect(onPlaceComponent).not.toHaveBeenCalled();
+  });
+
+  it("places relay and transistor drops like any other palette part", () => {
+    const onPlaceComponent = vi.fn();
+    renderCanvas(makeSnapshot(), makeConnections(), { onPlaceComponent });
+
+    const svg = screen.getByTestId("circuit-canvas");
+    dropPaletteComponent(svg, "relay", 300, 200);
+    dropPaletteComponent(svg, "transistor", 500, 400);
+
+    expect(onPlaceComponent).toHaveBeenCalledTimes(2);
+    expect(onPlaceComponent).toHaveBeenCalledWith({ x: 300, y: 200 }, "relay");
+    expect(onPlaceComponent).toHaveBeenCalledWith({ x: 500, y: 400 }, "transistor");
   });
 
   it("drags an existing component body to reposition it", () => {

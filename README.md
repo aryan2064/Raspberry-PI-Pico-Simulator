@@ -19,20 +19,21 @@ a Web Worker**.
 
 | Area | Status |
 | --- | --- |
-| Engine data model (`Pin`, `Wire`, `Component`, `Circuit`, `PicoBoard`, `LED`, `Button`) | ✅ Built, split into `src/engine/`, unit-tested |
+| Engine data model (`Pin`, `Wire`, `Component`, `Circuit`, `PicoBoard`, `LED`, `Button`, `Relay`, `Transistor`) | ✅ Built, split into `src/engine/`, unit-tested |
 | Net resolution via union-find + `tick(dt)` simulation step | ✅ Built & tested |
 | Analog channel (`Pin.analogValue`, 0–1 PWM duty) + analog propagation in `tick()` | ✅ Built & tested (digital behavior untouched) |
 | Pin pulls (`Pin.pull`: UP/DOWN/NONE net fallback) + passive `Button` (4 legs, permanent strip pairs + press bridge via `getInternalConnections()`) | ✅ Built & tested |
-| Unit tests (Vitest) | ✅ 92 passing (18 Circuit / 7 PicoBoard / 6 LedBrightness / 4 analog / 6 button / 19 CircuitHost / 23 canvas-jsdom / 9 App-level), plus 1 real-Pyodide integration test |
+| State-driven switches (`Relay` SPDT in/nc/com/no, `Transistor` base/collector/emitter — internal connections decided by a control input per tick) | ✅ Built & tested |
+| Unit tests (Vitest) | ✅ 104 passing (18 Circuit / 7 PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay / 4 transistor / 20 CircuitHost / 25 canvas-jsdom / 9 App-level), plus 1 real-Pyodide integration test |
 | Vite + React + TypeScript scaffold | ✅ Builds & runs |
-| `@wokwi/elements` visuals (LED, button) + scaled HTML-stage canvas (pin markers aligned to element `pinInfo`) | ✅ Built & verified in-browser |
+| `@wokwi/elements` visuals (LED, button) + scaled HTML-stage canvas (pin markers aligned to element `pinInfo`); hand-drawn SVG for board/relay/transistor | ✅ Built & verified in-browser |
 | Canvas rendering (snapshot renderer; click-to-wire, click-to-delete-wire) | ✅ Built & tested |
-| Component palette + drag-to-place/drag-to-move (LED, Button) + deleting placed parts | ✅ Built & tested (survives Stop/replay) |
+| Component palette + drag-to-place/drag-to-move (LED, Button, Relay, Transistor) + deleting placed parts | ✅ Built & tested (survives Stop/replay) |
 | Pyodide in a Web Worker + `machine.Pin` shim (worker owns the live `Circuit`) | ✅ Built & verified (incl. real-Pyodide script driving a wired LED on/off) |
 | `machine.PWM` (duty only) → LED brightness over the analog channel | ✅ Built & verified (a `duty_u16` fade sweeps a real `wokwi-led` noticeably dim→bright; `freq()` stored, never simulated) |
 | Real Pico header pinout on the board (40 pins: 26 GPIOs, 8 GND pads as one ground plane, `3V3_OUT`, non-GPIO pins UNSET; GP23/24/25 absent) | ✅ Built & verified (markers sub-pixel on every checked pad in-browser) |
 | Validation/error states (short-circuit conflicts: red dashed wires + banner) | ✅ Conflict detection built (diagnostic `hasConflict` flag) |
-| Component library beyond `LED` | ◐ LED + Button only (more added only when a feature needs one) |
+| Component library beyond `LED` | ◑ LED + Button + Relay + Transistor (more added only when a feature needs one) |
 
 ## Quick start
 
@@ -65,21 +66,27 @@ pairs `leg1a`/`leg1b` + `leg2a`/`leg2b`, press adds `leg1a`–`leg2a`;
 pull-down keeps the undriven net LOW, no conflict from pulls), and
 `PicoBoard.test.ts` (real 40-pin header: 26 GPIOs, the eight tied GND
 pads as one ground plane, non-GPIO pins present, `3V3_OUT` rail, and
-GP23/24/25 throwing "no pin labeled…" — they're not on the header). 35
-tests total across those four suites.
+GP23/24/25 throwing "no pin labeled…" — they're not on the header),
+plus `Relay.test.ts` (SPDT: de-energized com–nc, energized com–no, the
+old nc path breaking, coil vcc/gnd ignored) and `Transistor.test.ts`
+(NPN: base HIGH conducts, LOW **or** FLOATING cuts off, end-to-end LED
+drive). 42
+tests total across those six suites.
 
 The canvas layer is tested separately under **jsdom**
-(`src/ui/__tests__/CircuitCanvas.test.tsx`, 23 tests): components/wires
+(`src/ui/__tests__/CircuitCanvas.test.tsx`, 25 tests): components/wires
 render from a snapshot; the LED reflects snapshot state (`data-on`),
 selection ring, press/release, connect, and disconnect; wire endpoints
 track the body wrapper positions (`style.left/top`); a dropped palette
 line places a component at the drop point (and non-palette payloads are
-ignored); bodies drag to move past a threshold. Palette placement
+ignored); bodies drag to move past a threshold. Relay/transistor bodies
+render with their `data-energized`/`data-conducting` state attributes and
+their drops place like any other part. Palette placement
 end-to-end (drop → worker message → pin wiring → Stop replay survival)
 and placed-part deletion are covered in `src/App.test.tsx` (9 tests)
 with a fake `Worker` stub. The worker's
 message handling is plain-TS and tested in Node
-(`src/execution/__tests__/CircuitHost.test.ts`, 19 tests) — no
+(`src/execution/__tests__/CircuitHost.test.ts`, 20 tests) — no
 Worker/Pyodide needed. Dev deps `jsdom` +
 `@testing-library/react` are required for the jsdom suite only.
 
@@ -122,15 +129,20 @@ src/
       LED.ts         on/off only — deliberately minimal
       Button.ts      4-leg passive switch: 2 permanent strip pairs,
                      press bridges strips (leg1a–leg2a)
+      Relay.ts       state-driven SPDT: in/vcc/gnd/com/no/nc, com–nc
+                     unless in is HIGH (then com–no)
+      Transistor.ts  NPN switch: base HIGH shorts collector–emitter,
+                     LOW/FLOATING cuts off
     __tests__/       Vitest unit tests
   ui/                React + canvas rendering
-    ComponentPalette.tsx  drag sources: LED + Button (+ scaled previews)
+    ComponentPalette.tsx  drag sources: LED + Button + Relay + Transistor
+                          (+ scaled previews)
     CircuitCanvas.tsx     snapshot renderer + input relay; scaled HTML
                           stage (1200×700) under SVG wire/pin overlays
     ScriptPanel.tsx       MicroPython editor + Run/Stop + output
-    components/           LedView, PicoBoardView, ButtonView (+ wokwi
-                          custom elements from the published
-                          @wokwi/elements package, MIT)
+    components/           LedView, PicoBoardView, ButtonView, RelayView,
+                          TransistorView (+ wokwi custom elements from the
+                          published @wokwi/elements package, MIT)
     __tests__/            jsdom UI tests (CircuitCanvas.test.tsx)
   execution/         Pyodide + machine shim + worker
     messages.ts           client↔worker protocol (single source of truth)
@@ -196,13 +208,20 @@ circuit on a canvas:
   pointer + darker color). Wires and pins are drawn as SVG overlays
   above the HTML stage, so they always show on top of component bodies
   and pins stay visible/clickable over everything.
-- **Palette + drag**: drag an LED or Button from the sidebar palette onto
+- **Palette + drag**: drag an LED, Button, Relay, or Transistor from the
+  sidebar palette onto
   the canvas to place it (it lands where you drop it), drag any part's
   body to reposition it, and wire it like the demo parts. Placed parts
   survive Stop — the topology record replays them into the fresh worker,
   and their positions are plain UI state, so nothing jumps after a
   respawn. Select a part (ring highlight) and hit Delete/Backspace or
-  the floating Delete button to remove it along with its wires.
+  the floating Delete button to remove it along with its wires. The
+  **Relay** (a 6-pin SPDT module: `in`/`vcc`/`gnd` + `com`/`no`/`nc`)
+  normally shorts `com`–`nc` and switches to `com`–`no` when its `in`
+  pin goes HIGH (e.g. from a GPIO); the **NPN transistor**
+  (`base`/`collector`/`emitter`) conducts `collector`–`emitter` only
+  while `base` reads HIGH. Both are state-driven passive switches — wire
+  the control input, and the contacts re-resolve automatically.
 - **MicroPython**: click Run with the default blink program and the
   second LED (`GPIO16`) blinks on/off from `machine.Pin` writes; Stop
   kills the running script (even a stuck loop) and immediately rebuilds
@@ -249,7 +268,8 @@ See `docs/ROADMAP.md`. The next milestones:
    conflicts` banner (warning, not prevention); other validation states
    (undeclared pins, unmapped Python pin numbers) still open.
 5. **Component library growth** — one component at a time, only when a
-   feature needs it. ⬜ (LED + Button + pulls done; more pending.)
+   feature needs it. ◑ (LED + Button + Relay + Transistor done; more
+   pending.)
 
 ## Ground rules for contributors (brief)
 

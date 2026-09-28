@@ -588,3 +588,104 @@ Component bodies keep `data-testid="body-<id>"` wrappers; hit targets
 remain the component-named testids (`led`, `led-body`, `button`,
 `button-body`). Tests assert on element testids and wrapper
 `style.left/top` for position, never on `<g transform>` strings.
+
+---
+
+**Relay is a hand-drawn module, not the `wokwi-ks2e-m-dc5` element: the SPDT-switch module API is `in/vcc/gnd/com/no/nc`, and the KS2E is a bare contactor**
+
+The installed `@wokwi/elements` does ship a relay — `wokwi-ks2e-m-dc5`,
+a bare electromagnetic DPDT relay (8 pads: `NO1`/`NC1`/`P1`/`COIL1` and
+`NO2`/`NC2`/`P2`/`COIL2`, two independent SPDT poles + a coil —
+`01_Relay-elec_symbol` style body, no state/actuation animation). Two
+reasons it was rejected:
+
+1. **Interface mismatch.** The task's relay is a **relay module** with
+   six logical pins, `in`/`vcc`/`gnd` being the coil side and `com`/`no`
+   `/nc` the signal side. The KS2E's real geometry has no such pins —
+   its coil has two pads (`COIL1`/`COIL2`), no `in` (the module's `in`
+   is its *driver transistor's* input, which the bare part doesn't have
+   as a pad), and it has *two* poles, not one SPDT. Mapping our six
+   logical pins onto its physical pads would mean inventing coordinate
+   geometry that isn't in the element — exactly the "no guessing"
+   rule established for the Pico board's pad offsets.
+2. **Visual mismatch.** The task draws a relay as a **module** (screw
+   terminal strips). The KS2E's schematic-style body would read as a
+   component symbol, not a placeable module, and it has no coil
+   energization state our canvas could reflect.
+
+So the relay is hand-drawn SVG (generic module visual language, no
+commercial-part imitation): 140×52, screw strips on both long edges,
+coil zigzag + status LED. Both NO and NC are modeled so a de-energized
+relay demonstrably blocks the NC path when energized — nothing is
+guessed, the contact geography is just our own.
+
+Also audited for this task: `@wokwi/elements` 1.9.2 registers exactly
+**50** custom-element tags — one per element file under
+`dist/esm/*-element.js`, each tag extracted from its Lit
+`customElement("wokwi-…")` decorator call:
+
+  wokwi-7segment, wokwi-analog-joystick, wokwi-arduino-mega,
+  wokwi-arduino-nano, wokwi-arduino-uno, wokwi-biaxial-stepper,
+  wokwi-big-sound-sensor, wokwi-buzzer, wokwi-dht22,
+  wokwi-dip-switch-8, wokwi-ds1307, wokwi-esp32-devkit-v1,
+  wokwi-flame-sensor, wokwi-franzininho, wokwi-gas-sensor, wokwi-hc-sr04,
+  wokwi-heart-beat-sensor, wokwi-hx711, wokwi-ili9341, wokwi-ir-receiver,
+  wokwi-ir-remote, wokwi-ks2e-m-dc5, wokwi-ky-040, wokwi-lcd1602,
+  wokwi-lcd2004, wokwi-led, wokwi-led-bar-graph, wokwi-led-ring,
+  wokwi-membrane-keypad, wokwi-microsd-card, wokwi-mpu6050,
+  wokwi-nano-rp2040-connect, wokwi-neopixel, wokwi-neopixel-matrix,
+  wokwi-ntc-temperature-sensor, wokwi-photoresistor-sensor,
+  wokwi-pir-motion-sensor, wokwi-potentiometer, wokwi-pushbutton,
+  wokwi-pushbutton-6mm, wokwi-resistor, wokwi-rgb-led,
+  wokwi-rotary-dialer, wokwi-servo, wokwi-slide-potentiometer,
+  wokwi-slide-switch, wokwi-small-sound-sensor, wokwi-ssd1306,
+  wokwi-stepper-motor, wokwi-tilt-switch
+
+A recursive content scan of the **entire** package for
+`relay`, `transistor`, `bjt`, `npn`, `pnp`, `mosfet`, and `regulator`
+returns **zero occurrences each** — there is no NPN/PNP/MOS transistor
+element and no relay-element beyond the bare-pad `wokwi-ks2e-m-dc5`
+above, which is why the transistor is also hand-drawn.
+
+---
+
+**Relay `vcc`/`gnd` are present-but-inert coil pins, not simulated drive**
+
+The relay's control side is only `in` (MODE_IN). `vcc` and `gnd` exist
+for wiring realism — a real module's coil-driver circuit needs them —
+but are UNSET pins with no behavior: no coil current, no pull-in
+threshold, no wire-between-vcc-and-gnd modeling. The energization
+decision is strictly `pin("in").value === "HIGH"` each `update()`. This
+keeps the relay a pure state-driven `HasInternalConnections` switch
+(exactly the Button pattern, with the flip driven by an input state
+instead of a user press) and avoids simulating the driver circuit no
+component in the sim consumes. Wiring `vcc`/`gnd` to rails is legal and
+visually correct; it just doesn't influence the contacts.
+
+**Transistor is a base-controlled switch with no analog network: HIGH = saturated short, LOW/FLOATING = cutoff**
+
+The NPN (`base`/`collector`/`emitter`) deliberately has **no**
+base-resistor, Vbe-threshold, current-gain, or leakage modeling — those
+would require per-pair resistance/voltage math the net model doesn't
+do. Instead: `base` reads `HIGH` → collector-emitter is a dead short
+(saturation); `LOW` **or FLOATING** → open. `getInternalConnections()`
+returns `[[collector, emitter]]` or `[]` respectively (cutoff returns
+zero pairs, so the two switch terminals are never on a shared net).
+This is the same deliberate simplification as the relay's in-pin: it
+gives fully correct *digital control* behavior for the target use
+(switching a load rail on/off with a GPIO) while deferring any analog
+semiconductor model until a feature actually needs it. The BC547-style
+lead order (left→right **collector, base, emitter**) is documented so
+the *visual* center lead (base) matches the control terminal.
+
+**State-driven `HasInternalConnections` follows the same two-tick latency as the button's press, because the state flip only lands in `update()`**
+
+A state-driven connection (`energized`/`conducting`) is decided in
+`update()`, which runs after a tick's net grouping — so a change on the
+control net takes exactly two `tick()`s to reach the contacts, mirroring
+how net membership settles after any passive-switch change. Tests drive
+control inputs over real wires (never by poking the private flag) and
+assert the settled state after the two ticks, plus the broken-old-contact
+behavior in between. This is inherent to `tick()`'s ordering (the
+"re-propagate after update" decision), not a relay- or transistor-specific
+quirk.

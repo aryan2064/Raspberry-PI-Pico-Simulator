@@ -6,5 +6,7 @@ export { Wire } from "./Wire";
 export { PicoBoard } from "./components/PicoBoard";
 export { LED } from "./components/LED";
 export { Button } from "./components/Button";
+export { Relay } from "./components/Relay";
+export { Transistor } from "./components/Transistor";
 export type { PinMode, PinValue, PinPull } from "./Pin";
 export type { RenderInfo } from "./RenderInfo";

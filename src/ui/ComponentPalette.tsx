@@ -1,27 +1,60 @@
 import type { CSSProperties } from "react";
 import type { ComponentKind } from "../execution/messages";
+import { RelayArt, RELAY_W, RELAY_H } from "./components/RelayView";
+import { TransistorArt, TRANSISTOR_W, TRANSISTOR_H } from "./components/TransistorView";
 
 // Custom MIME type used for palette -> canvas native-drag payloads. Using a
 // non-standard type (rather than e.g. "text/plain") keeps unrelated page
 // drops (links, files, selected text) from being misread as placements.
 export const COMPONENT_MIME = "application/x-pico-component";
 
-type PaletteKind = Extract<ComponentKind, "led" | "button">;
+type PaletteKind = Extract<ComponentKind, "led" | "button" | "relay" | "transistor">;
 
 const PALETTE_ITEMS: Array<{ kind: PaletteKind; label: string; hint: string }> = [
   { kind: "led", label: "LED", hint: "anode / cathode" },
   { kind: "button", label: "Button", hint: "bridges both strips while pressed" },
+  { kind: "relay", label: "Relay", hint: "NC→COM normally; NO when in is HIGH" },
+  { kind: "transistor", label: "NPN", hint: "conducts when base is HIGH" },
 ];
 
-// Small live previews of the real wokwi elements. The custom elements are
-// registered in main.tsx (browser only); in tests they simply render as
-// unrecognized tags, which is harmless here.
+// Small live previews of the real wokwi elements (led/button) plus the
+// hand-drawn art (relay/transistor). The custom elements are registered in
+// main.tsx (browser only); in tests they simply render as unrecognized tags,
+// which is harmless here.
 function PalettePreview({ kind }: { kind: PaletteKind }) {
   const previewStyle: CSSProperties = {
     transform: "scale(0.6)",
     transformOrigin: "top left",
     pointerEvents: "none",
   };
+  if (kind === "relay") {
+    return (
+      <div
+        style={{
+          ...previewStyle,
+          width: RELAY_W * 0.6,
+          height: RELAY_H * 0.6,
+          marginBottom: 4,
+        }}
+      >
+        <RelayArt energized={false} />
+      </div>
+    );
+  }
+  if (kind === "transistor") {
+    return (
+      <div
+        style={{
+          ...previewStyle,
+          width: TRANSISTOR_W * 0.6,
+          height: TRANSISTOR_H * 0.6,
+          marginBottom: 4,
+        }}
+      >
+        <TransistorArt conducting={false} />
+      </div>
+    );
+  }
   return (
     <div
       style={{
