@@ -244,6 +244,32 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     }
   });
 
+  it("renders a stepper body with its spin state as data attributes and all six pins", () => {
+    const snapshot: SnapshotMessage = {
+      type: "snapshot",
+      conflictedPinIds: [],
+      components: [
+        { id: "board", renderInfo: { type: "pico_board" }, pins: Array.from({ length: 3 }, (_, i) => ({ id: `board:GPIO${i}`, label: `GPIO${i}` })) },
+        {
+          id: "motor",
+          renderInfo: { type: "stepper", angleDegrees: 1.40625, direction: "CW", stepsPerSecond: 20 },
+          pins: ["in1", "in2", "in3", "in4", "vcc", "gnd"].map((label) => ({ id: `motor:${label}`, label })),
+        },
+      ],
+    };
+    const positions = { board: { x: 40, y: 40 }, motor: { x: 400, y: 80 } };
+    renderCanvas(snapshot, [], {}, positions);
+
+    const motorBody = screen.getByTestId("stepper-body");
+    expect(motorBody.getAttribute("data-angle")).toBe("1.40625");
+    expect(motorBody.getAttribute("data-direction")).toBe("CW");
+    expect(motorBody.getAttribute("data-steps-per-second")).toBe("20");
+
+    for (const label of ["in1", "in2", "in3", "in4", "vcc", "gnd"]) {
+      expect(screen.getByTestId(`pin-motor-${label}`)).toBeTruthy();
+    }
+  });
+
   it("relays button press/release to the worker callbacks", () => {
     const onPress = vi.fn();
     const onRelease = vi.fn();
@@ -348,17 +374,19 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     expect(onPlaceComponent).not.toHaveBeenCalled();
   });
 
-  it("places relay and transistor drops like any other palette part", () => {
+  it("places relay, transistor, and stepper drops like any other palette part", () => {
     const onPlaceComponent = vi.fn();
     renderCanvas(makeSnapshot(), makeConnections(), { onPlaceComponent });
 
     const svg = screen.getByTestId("circuit-canvas");
     dropPaletteComponent(svg, "relay", 300, 200);
     dropPaletteComponent(svg, "transistor", 500, 400);
+    dropPaletteComponent(svg, "stepper", 700, 600);
 
-    expect(onPlaceComponent).toHaveBeenCalledTimes(2);
+    expect(onPlaceComponent).toHaveBeenCalledTimes(3);
     expect(onPlaceComponent).toHaveBeenCalledWith({ x: 300, y: 200 }, "relay");
     expect(onPlaceComponent).toHaveBeenCalledWith({ x: 500, y: 400 }, "transistor");
+    expect(onPlaceComponent).toHaveBeenCalledWith({ x: 700, y: 600 }, "stepper");
   });
 
   it("drags an existing component body to reposition it", () => {

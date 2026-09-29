@@ -1,4 +1,4 @@
-import { Button, Circuit, LED, PicoBoard, Relay, Transistor } from "../engine";
+import { Button, Circuit, LED, PicoBoard, Relay, StepperMotor, Transistor } from "../engine";
 import type { Pin } from "../engine";
 import type {
   AddComponentMessage,
@@ -97,6 +97,9 @@ export class CircuitHost {
         break;
       case "transistor":
         this.circuit.addComponent(new Transistor(msg.componentId));
+        break;
+      case "stepper":
+        this.circuit.addComponent(new StepperMotor(msg.componentId));
         break;
     }
   }

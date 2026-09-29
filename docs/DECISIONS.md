@@ -689,3 +689,88 @@ assert the settled state after the two ticks, plus the broken-old-contact
 behavior in between. This is inherent to `tick()`'s ordering (the
 "re-propagate after update" decision), not a relay- or transistor-specific
 quirk.
+
+---
+
+**Stepper is hand-drawn: no `@wokwi/elements` or fritzing part models a 28BYJ-48 + ULN2003 module**
+
+The motor component models the **module** the MCU drives: a 28BYJ-48
+unipolar stepper wired through a ULN2003 darlington board, exposed as
+four raw digital control inputs (`in1`–`in4`) plus inert `vcc`/`gnd`.
+Neither upstream library ships anything close enough to use without
+inventing geometry:
+
+- `wokwi-stepper-motor` (in `@wokwi/elements` 1.9.2) is a **generic
+  bipolar NEMA** unit: pins `A+`/`A-`/`B+`/`B-`, a `size` attribute
+  selecting NEMA 8–34, and an `angle` that is a *display-only* property
+  (the scaffolded `.angle` setter / `_r` marker) — it has no
+  step-sequence semantics, no IN1–IN4 vocabulary, and its pins map to
+  nothing on our module.
+- `wokwi-biaxial-stepper` is a **dual bipolar** part (8 pins
+  `A1+`/`A1-`/`B1+`/`B1-`…`B2-`), further removed.
+- `fritzing/fritzing-parts` (develop branch) has **zero `28BYJ`
+  matches in the entire repo tree**. Core ships only
+  `stepper_motor_unipolar.fzp` — a generic **square NEMA-style
+  housing** with 6 connectors `A/B/C/D/COMMON_1/COMMON_2` (no
+  `vcc`/`gnd`, no IN1–IN4) — and `ULN2003A.fzp`, a **bare DIP-16 chip**
+  with no board, no header, and no motor. Using either would force us
+  to invent the whole module anyway.
+
+So the visual is ours: a round green 28BYJ-style motor body next to a
+blue ULN2003 driver board with a 6-way control header on its right
+edge (generic module language, no vendor-identical imitation —
+same rule as the relay). Motor housing and board are static; only an
+internal shaft-orientation marker rotates with `angleDegrees`, so a
+running sequence reads as visible spin.
+
+**Stepper sequences are hardcoded telltale tables, not derived — 4096 half-step / 2048 full-step per revolution**
+
+The two pattern tables came from the task itself and were verified as
+the real 28BYJ-48 sets rather than recomputed at runtime:
+
+    Full-step:   1010  0110  0101  1001        (2048 steps/rev)
+    Half-step:   1000  1010  0010  0110  0100  0101  0001  1001
+                                               (4096 steps/rev)
+
+Bit order is IN1 IN2 IN3 IN4 (**IN1 = most significant**), `1` =
+winding excited (the ULN2003 sinks a coil when its input goes HIGH).
+Structural fact exploited by the angle math: the four full-step states
+sit at **every other position** of the half-step table, so a full step
+advances 2× a half step (360/2048 per state vs 360/4096). Every pair
+of adjacent states is adjacent in **exactly one** table, so a
+transition can never ambiguously match both — the motor can always
+decide which table it was driving. The tables are declared once and
+any further verification edits both lists in lockstep.
+
+**Stepper semantics: anchor on first contact, re-lock on the adjacent table, ignore anything else**
+
+The four control pins are MODE_IN (pure sensor — no
+`HasInternalConnections`, no driving value, so no two-tick contact
+latency like the relay/transistor; one `tick()` after a pattern write
+lands it). Recognition state per `update()`: rebuild the 4-bit
+pattern; if it changed since last tick, first match anchors onto the
+table that contains it *without moving* (a real driver can't know its
+shaft position until it starts stepping, so we don't invent one);
+thereafter a pattern that is the next or previous state in the locked
+table advances by that table's step, and a pattern only adjacent in
+the *other* table re-locks onto it (that is how half-step driving
+folds in cleanly after a full-step anchor, and vice versa). Any other
+pattern — all-low, all-high, misordered jumps — is ignored: no move,
+no error, lock survives. `direction` is `"CW"`/`"CCW"` on step and
+`"none"` until the first real step; `stepsPerSecond` is `1 / real
+elapsed time since the last recognized step`, updating every tick so a
+stationary shaft's rate decays toward 0 (and stays 0 until the first
+step). `vcc`/`gnd` are UNSET and inert, mirroring the relay's coil
+pins — wiring realism only.
+
+One practical consequence for verification: the Pyodide bridge in
+`pyodide.worker.ts` ticks the sim (and posts a snapshot) on **every**
+`machine.Pin.value(...)` write, so a naive four-pin write from Python
+lets each intermediate pattern reach the engine for a tick (e.g. going
+`1010 -> 0110` by writing IN1 then IN2 exposes `0010`, a genuine half
+step). The engine faithfully consuming those transients is correct
+behaviour — the sim is digital and pin writes are discrete events. The
+CircuitHost e2e batches the four writes into one tick, while
+browser-verify step 10 writes **only the pin that changes** per half
+table transition (the half table is a one-bit walk), so each write is
+exactly one recognized step and the angle math stays deterministic.

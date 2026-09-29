@@ -2,19 +2,24 @@ import type { CSSProperties } from "react";
 import type { ComponentKind } from "../execution/messages";
 import { RelayArt, RELAY_W, RELAY_H } from "./components/RelayView";
 import { TransistorArt, TRANSISTOR_W, TRANSISTOR_H } from "./components/TransistorView";
+import { StepperArt } from "./components/StepperMotorView";
 
 // Custom MIME type used for palette -> canvas native-drag payloads. Using a
 // non-standard type (rather than e.g. "text/plain") keeps unrelated page
 // drops (links, files, selected text) from being misread as placements.
 export const COMPONENT_MIME = "application/x-pico-component";
 
-type PaletteKind = Extract<ComponentKind, "led" | "button" | "relay" | "transistor">;
+type PaletteKind = Extract<
+  ComponentKind,
+  "led" | "button" | "relay" | "transistor" | "stepper"
+>;
 
 const PALETTE_ITEMS: Array<{ kind: PaletteKind; label: string; hint: string }> = [
   { kind: "led", label: "LED", hint: "anode / cathode" },
   { kind: "button", label: "Button", hint: "bridges both strips while pressed" },
   { kind: "relay", label: "Relay", hint: "NC→COM normally; NO when in is HIGH" },
   { kind: "transistor", label: "NPN", hint: "conducts when base is HIGH" },
+  { kind: "stepper", label: "Stepper", hint: "28BYJ-48 + ULN2003; IN1–IN4 sequences spin it" },
 ];
 
 // Small live previews of the real wokwi elements (led/button) plus the
@@ -52,6 +57,20 @@ function PalettePreview({ kind }: { kind: PaletteKind }) {
         }}
       >
         <TransistorArt conducting={false} />
+      </div>
+    );
+  }
+  if (kind === "stepper") {
+    return (
+      <div
+        style={{
+          ...previewStyle,
+          width: 144,
+          height: 66,
+          marginBottom: 4,
+        }}
+      >
+        <StepperArt angleDegrees={0} />
       </div>
     );
   }

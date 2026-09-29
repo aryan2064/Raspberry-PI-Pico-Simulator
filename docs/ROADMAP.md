@@ -40,7 +40,11 @@ w# Roadmap
    added (see "Resolved / closed items") — two more *state-driven
    passive switches* exercising
    `HasInternalConnections`, built for the stated reason of proving
-   input-driven net switching. Not otherwise
+   input-driven net switching. Then `StepperMotor` + ULN2003 module —
+   the first *sequence-sensing stateful* component (reads a 4-bit
+   IN1–IN4 pattern in `update()` against hardcoded full/half-step
+   tables, anchors on first contact, re-locks tables, ignores
+   garbage; reports angle/direction/live rate). Not otherwise
    started.
 
 Work should generally proceed in this order. Skipping ahead (e.g.
@@ -305,8 +309,8 @@ before deciding to skip ahead again.
   instructions. Keep it updated as work progresses.
 - Next up: remaining validation/error states, `machine.ADC`/analog
   *input*, or `I2C` — `machine.PWM` + LED brightness, the **real
-  40-pin board header**, and the **Relay + Transistor switches** are
-  **done** (see
+  40-pin board header**, the **Relay + Transistor switches**, and the
+  **28BYJ-48/ULN2003 StepperMotor** are **done** (see
   the "Resolved / closed items" section below and "Current status
   detail").
 
@@ -468,5 +472,35 @@ before deciding to skip ahead again.
   canvas tests (state attrs + relay/transistor drops), updated App
   palette test — 104 passing + 1 skipped total, typecheck + build
   clean, end-to-end switching confirmed in browser-verify step 9.
+- **StepperMotor + ULN2003 module — done.** A 28BYJ-48 unipolar stepper
+  through a ULN2003 darlington board, exposed exactly as the MCU drives
+  it: `in1`/`in2`/`in3`/`in4` (MODE_IN) plus inert `vcc`/`gnd`
+  (UNSET — same rule as the relay's coil pins). The first
+  *sequence-sensing stateful* component: `update()` rebuilds the 4-bit
+  pattern (IN1 = MSB) and matches it against the **hardcoded** 28BYJ-48
+  tables (full-step `1010 0110 0101 1001` = 2048 steps/rev; half-step
+  `1000 1010 0010 0110 0100 0101 0001 1001` = 4096). The first valid
+  pattern anchors (no phantom movement); transitions valid in the
+  *other* table re-lock it (half-stepping folds into a full-step anchor
+  and vice versa); invalid patterns are ignored — no crash, no move,
+  lock survives. Reports `{ type, angleDegrees, direction,
+  stepsPerSecond }` where the rate is `1 / real elapsed time since the
+  last recognized step` (decays toward 0 while held). Implements
+  neither `HasInternalConnections` nor a driver, so one `tick()`
+  settles a pattern write — no two-tick contact latency. View is
+  hand-drawn SVG (`StepperMotorView.tsx`): green round motor body with
+  a rotating orientation marker + blue driver board with a 6-way
+  control header, because neither `@wokwi/elements` (`wokwi-stepper-
+  motor` / `wokwi-biaxial-stepper` are generic bipolar NEMA units with
+  no IN1–IN4 vocabulary or step semantics) nor fritzing-parts (zero
+  28BYJ anywhere; only a generic square NEMA unipolar + a bare
+  ULN2003A DIP) models the module — see `docs/DECISIONS.md`. Canvas
+  offsets/render/drop and worker `addComponent` wired; palette now
+  offers LED/Button/Relay/Transistor/Stepper. Verified by 6 new engine
+  tests (anchor+advance, table re-lock + 2× angle, reverse/CCW
+  subtraction, pure half-step, garbage tolerance, live rate incl.
+  decay), a CircuitHost e2e (2 full cycles forward + 2 back through
+  GPIO0–3 over real wires), 2 canvas tests, updated App palette test —
+  113 passing + 1 skipped total, typecheck + build clean.
 
 ---

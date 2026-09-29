@@ -19,6 +19,9 @@
 //   8. Non-blocking sleep (JSPI): during a time.sleep() blink script the button
 //      relay still lights LED1 promptly (worker event loop free mid-sleep) and
 //      the script still completes.
+//  10. StepperMotor: a script drives GPIO4..7 (in1..in4) 8 half-step cycles
+//      forward then 8 back (single-bit writes), lands on the exact expected
+//      angle/direction, and the rotating shaft marker sweeps with it.
 import { spawn } from "node:child_process";
 import { rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -123,10 +126,15 @@ const state = () =>
         placedTransistor: posOf('body-placed-5'),
         placedLed6: posOf('body-placed-6'),
         placedLed7: posOf('body-placed-7'),
+        placedStepper: posOf('body-placed-8'),
         relayEnergized: q('[data-testid="relay-body"]')?.getAttribute('data-energized') ?? null,
         transistorConducting: q('[data-testid="transistor-body"]')?.getAttribute('data-conducting') ?? null,
         placed6On: (() => { const el = q('[data-testid="body-placed-6"] [data-testid="led-body"]'); return el?.getAttribute('data-on') ?? null; })(),
         placed7On: (() => { const el = q('[data-testid="body-placed-7"] [data-testid="led-body"]'); return el?.getAttribute('data-on') ?? null; })(),
+        stepperAngle: q('[data-testid="stepper-body"]')?.getAttribute('data-angle') ?? null,
+        stepperDirection: q('[data-testid="stepper-body"]')?.getAttribute('data-direction') ?? null,
+        stepperStepsPerSecond: q('[data-testid="stepper-body"]')?.getAttribute('data-steps-per-second') ?? null,
+        stepperRotate: (() => { const g = q('[data-testid="stepper-body"] g'); return g?.getAttribute('transform') ?? null; })(),
         placedBodies: qa('[data-testid^="body-placed-"]').length,
         deleteButton: q('[data-testid="delete-component"]')?.textContent ?? null,
         wire7: (() => {
@@ -806,6 +814,62 @@ const state = () =>
   );
   console.log("step9 transistor cut off:", JSON.stringify(s));
   assert(!s.issue, "unexpected issue banner after step9: " + s.issue);
+
+  // ---- 10. StepperMotor end-to-end rotation. A script drives GPIO4..7
+  //         (-> in1..in4) through the half-step table. Because the shim ticks
+  //         the sim on every value() write, only the ONE pin that changes per
+  //         table transition is written — a naive all-four-pins write would
+  //         expose each intermediate 2-bit/transient pattern to the engine and
+  //         corrupt the step accounting. 2 laps forward (16 half-steps)
+  //         must land on exactly 16*(360/4096) = 1.40625 deg CW, 2 laps back
+  //         must return to 0 deg CCW, and the rotating shaft marker must move
+  //         with data-angle.
+  await dropKindAt('stepper', 640, 200);
+  s = await waitFor("dropped Stepper should render as placed-8", (x) => x.placedStepper !== null);
+  assert(s.stepperAngle === "0", "stepper should start at angle 0, got " + s.stepperAngle);
+  assert(s.stepperDirection === "none", "stepper should start direction none, got " + s.stepperDirection);
+  assert(s.stepperRotate === "rotate(0 54 55)", "marker should start unrotated, got " + s.stepperRotate);
+  await wire('pin-board-GPIO4', 'pin-placed-8-in1');
+  await wire('pin-board-GPIO5', 'pin-placed-8-in2');
+  await wire('pin-board-GPIO6', 'pin-placed-8-in3');
+  await wire('pin-board-GPIO7', 'pin-placed-8-in4');
+  s = await waitFor(
+    "all four stepper-drive wires should exist",
+    (x) => ["wire-w19", "wire-w20", "wire-w21", "wire-w22"].every((w) => x.wires.includes(w))
+  );
+  console.log("step10 wired:", JSON.stringify(s));
+
+  await evaljs(`(()=>{
+    const ta = document.querySelector('textarea');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
+    setter.call(ta, 'import machine, time\\nprint("S10START")\\np = [machine.Pin(4, machine.Pin.OUT), machine.Pin(5, machine.Pin.OUT), machine.Pin(6, machine.Pin.OUT), machine.Pin(7, machine.Pin.OUT)]\\nHLF = [0b1000, 0b1010, 0b0010, 0b0110, 0b0100, 0b0101, 0b0001, 0b1001]\\ndef drive(prev, nxt, t=0.04):\\n    diff = prev ^ nxt\\n    for i in range(4):\\n        if diff & (0b1000 >> i):\\n            p[i].value((nxt >> (3 - i)) & 1)\\n    time.sleep(t)\\n    return nxt\\ncur = drive(0, 0b1000)\\nfor _ in range(2):\\n    for v in HLF[1:] + HLF[:1]:\\n        cur = drive(cur, v)\\nprint("S10FWD")\\ntime.sleep(1.0)\\nfor _ in range(2):\\n    for v in HLF[:0:-1]:\\n        cur = drive(cur, v)\\n    cur = drive(cur, 0b1000)\\nprint("S10BACK")\\n');
+    ta.dispatchEvent(new Event('input',{bubbles:true}));
+    return true;
+  })()`);
+  const s10Val = await evaljs(`(()=> document.querySelector('textarea').value)()`);
+  assert(s10Val.includes("S10START"), "editor did not take the stepper script");
+  await evaljs(
+    `(()=>{ [...document.querySelectorAll('button')]
+       .find((x)=>x.textContent.trim()==='Run').click(); return true; })()`
+  );
+  s = await waitFor("stepper drive should complete forward (S10FWD)", (x) => x.output?.includes("S10FWD"), 20000);
+  s = await waitFor(
+    "stepper should sit at 16 half-steps (1.40625 deg), CW",
+    (x) => x.stepperDirection === "CW" && Math.abs(parseFloat(x.stepperAngle) - 1.40625) < 0.01,
+    10000
+  );
+  assert(parseFloat(s.stepperStepsPerSecond) > 0, "live steps/sec should be reported during the drive, got " + s.stepperStepsPerSecond);
+  console.log("step10 forward CW:", JSON.stringify(s));
+  s = await waitFor("stepper should complete reverse (S10BACK)", (x) => x.output?.includes("S10BACK"), 20000);
+  s = await waitFor(
+    "stepper should return to ~0 deg, CCW",
+    (x) => x.stepperDirection === "CCW" && Math.abs(parseFloat(x.stepperAngle)) < 0.01,
+    10000
+  );
+  const backAngle = parseFloat(/rotate\((-?[0-9.]+)/.exec(s.stepperRotate)?.[1] ?? "NaN");
+  assert(Math.abs(backAngle) < 0.01, "marker should return to ~0 rotation, got " + s.stepperRotate);
+  console.log("step10 reverse CCW:", JSON.stringify(s));
+  assert(!s.issue, "unexpected issue banner after stepper step: " + s.issue);
 
   console.log("ALL BROWSER CHECKS PASSED");
 } catch (err) {

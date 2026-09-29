@@ -100,6 +100,26 @@ you haven't — this doc assumes you understand `Pin`, `Component`, and
    `Relay.test.ts` / `Transistor.test.ts` (and their `docs/DECISIONS.md`
    entries) for the walk-through.
 
+   **Sequence-sensing components are a third pattern.** `StepperMotor`
+   (`in1/in2/in3/in4/vcc/gnd`) models a 28BYJ-48 + ULN2003 driver module
+   as the MCU sees it: four raw digital control inputs and two inert
+   power pins. It is a pure *sensor* — it reads the four `IN` pins in
+   `update()`, reconstructs the 4-bit pattern (IN1 = MSB), and matches
+   it against the hardcoded full-step / half-step tables in
+   `docs/DECISIONS.md`. Because it never drives a net and swaps no
+   internal wiring, it implements neither `HasInternalConnections` nor
+   a `value`. The first valid pattern only *anchors* position (no
+   phantom movement); every subsequent pattern that is a valid
+   next-state (forward or backward) in either table advances the angle
+   by that table's step. Invalid patterns are ignored. This makes it
+   the first component whose behavior is *cross-tick stateful* in a way
+   the abstract base anticipates: it stores `angleDegrees`, direction,
+   the locked table + index, and a `timeSinceStep` accumulator it uses
+   to report a true `stepsPerSecond`. Tests drive the four inputs over
+   real wires (see `StepperMotor.test.ts`); only ONE `tick()` after a
+   pattern write is needed because all four pins are MODE_IN (no second
+   tick for an internal flip like the relay/transistor).
+
 3. **Name every pin with a clear `label`.** Use names that will make
    sense both on a rendered canvas and in a `machine`-shim context if
    relevant (e.g. `"anode"`/`"cathode"` for LED, `"leg1a"`/`"leg1b"`/
@@ -180,6 +200,7 @@ you haven't — this doc assumes you understand `Pin`, `Component`, and
 - [ ] Implemented `update(dt)` and `getRenderInfo()`
 - [ ] Passive switch? Implements `HasInternalConnections`, not pin-driving
 - [ ] State-driven switch? Control pin is MODE_IN, flag set in `update()`, decide between `[pair]` / `[pair]` or `[]` per state
+- [ ] Sequence-sensing stateful part? Reads multi-pin pattern in `update()`, hardcoded telltale tables, anchors first contact, ignores garbage, stores angle/direction/rate as fields
 - [ ] Added a view (`wokwi` element or static SVG, official part where one exists) with pin offsets + state testids
 - [ ] Wired `renderComponentView` + palette preview
 - [ ] Considered whether `HasStimulus<T>` applies

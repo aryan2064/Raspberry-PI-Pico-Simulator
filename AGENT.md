@@ -89,11 +89,11 @@ that's the one rule this project cannot bend on. See
       (real-Pyodide end-to-end; run with `npm run verify:python`).
       `src/test/setup.ts` patches jsdom's missing `crypto.randomUUID`
       (the engine's `newId()`), registered via `test.setupFiles`.
-      Current totals: **104 passing + 1 skipped** (18 Circuit / 7
-      PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
-      4 transistor / 20 CircuitHost / 25 canvas /
-      9 App; Pyodide.integration skipped by default — run it with
-      `npm run verify:python`).
+Current totals: **113 passing + 1 skipped** (18 Circuit / 7
+PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
+4 transistor / 6 stepper / 22 CircuitHost / 26 canvas /
+9 App; Pyodide.integration skipped by default — run it with
+`npm run verify:python`).
 - [x] Analog value channel on `Pin` (`analogValue: number | null`, 0–1
       duty for OUT pins) + analog propagation step in `Circuit.tick()`,
       independent of the digital channel; covered by
@@ -203,8 +203,8 @@ that's the one rule this project cannot bend on. See
       pauses the worker for the sleep duration). See DECISIONS.
 - [x] Component palette + drag interaction
       (`src/ui/ComponentPalette.tsx`, `src/App.tsx`,
-`src/App.test.tsx`): the palette offers LED, Button, Relay, and
-       Transistor (no second
+`src/App.test.tsx`): the palette offers LED, Button, Relay,
+       Transistor, and Stepper (no second
        board — PicoBoard stays a singleton) as HTML5 drag sources; dropping
       on the canvas converts client coords to stage coords via
       `clientToStagePoint()` (`getBoundingClientRect`-based, with a
@@ -302,14 +302,51 @@ that's the one rule this project cannot bend on. See
       AND wrong visuals — see `docs/DECISIONS.md`). Palette entries,
       canvas `PIN_OFFSETS`/`PIN_STYLE`/render cases + drop acceptance,
       and worker `addComponent` cases all wired. Verified by
-      `Relay.test.ts` (5) + `Transistor.test.ts` (4) — driving control
-      pins over real wires, settled-state + old-contact-break asserts —
-      plus CircuitHost snapshot/pins tests, canvas render + drop tests,
-      and updated App palette test.
+`Relay.test.ts` (5) + `Transistor.test.ts` (4) — driving control
+       pins over real wires, settled-state + old-contact-break asserts —
+       plus CircuitHost snapshot/pins tests, canvas render + drop tests,
+       and updated App palette test.
+- [x] `StepperMotor` + ULN2003 module — the first **sequence-sensing
+       stateful** component (`src/engine/components/StepperMotor.ts`):
+       pins `in1`/`in2`/`in3`/`in4` (MODE_IN) + inert `vcc`/`gnd`
+       (UNSET, wiring realism — same rule as the relay's coil pins). It
+       is a pure sensor: `update()` rebuilds the 4-bit pattern (IN1 =
+       MSB) and matches it against the **hardcoded** 28BYJ-48 telltale
+       tables (full-step `1010 0110 0101 1001` = 2048 steps/rev;
+       half-step `1000 1010 0010 0110 0100 0101 0001 1001` = 4096) —
+       see `docs/DECISIONS.md` for the derivation. The first valid
+       pattern anchors (no phantom movement); the locked table re-locks
+       onto the other table on a valid-but-opposite-table transition
+       (how half-stepping folds into a full-step anchor and vice versa);
+       any other pattern is ignored (no crash, no move, lock survives).
+       Reports `{ type:"stepper", angleDegrees, direction:
+       "CW"|"CCW"|"none", stepsPerSecond }`, where the rate is `1 /
+       real elapsed time since the last recognized step` and decays to 0
+       on holds. Implements neither `HasInternalConnections` nor a
+       driver — one `tick()` after a pattern write settles it (no
+       two-tick contact latency). Hand-drawn view
+       (`StepperMotorView.tsx`, ~180×110): green round motor body with a
+       rotating orientation marker + blue driver board with a 6-way
+       control header (`data-angle`/`data-direction`/
+       `data-steps-per-second`), because neither `@wokwi/elements`
+       (its `wokwi-stepper-motor`/`wokwi-biaxial-stepper` are generic
+       bipolar NEMA units with no IN1–IN4 or step semantics) nor
+       fritzing-parts (zero 28BYJ anywhere; only a generic square NEMA
+       unipolar part + a bare ULN2003A DIP) models the module. Palette
+       entry, canvas offsets/render/drop, and worker `addComponent`
+       case wired. Verified by `StepperMotor.test.ts` (6: anchor+advance,
+       table re-lock + 2× angle, reverse/CCW subtraction, pure
+half-step, garbage tolerance, real-time rate incl. decay), a
+        CircuitHost e2e (2 full cycles forward + 2 back through GPIO0–3
+        over real wires), canvas render + drop tests, the App palette
+        test, and `browser-verify.mjs` step 10 (drop + wire 4 GPIOs,
+        half-step drive 2 laps forward to exactly 1.40625° CW / 2 back
+        to 0° CCW, live steps/sec + rotating marker asserted).
 - [ ] Validation / error states beyond conflict detection (undeclared
-      pins, unmapped Python pin numbers, etc.) — not started.
-- [ ] Component library beyond LED/Button/Relay/Transistor — not started
-      (intentionally; see "Don't pre-build" rule in `docs/ROADMAP.md`)
+       pins, unmapped Python pin numbers, etc.) — not started.
+- [ ] Component library beyond LED/Button/Relay/Transistor/Stepper — not
+       started (intentionally; see "Don't pre-build" rule in
+       `docs/ROADMAP.md`)
 
 ## Where to go next
 

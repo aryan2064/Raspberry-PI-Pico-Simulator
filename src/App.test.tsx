@@ -62,6 +62,7 @@ private emitSnapshot(): void {
       button: ["leg1a", "leg1b", "leg2a", "leg2b"],
       relay: ["in", "vcc", "gnd", "com", "no", "nc"],
       transistor: ["base", "collector", "emitter"],
+      stepper: ["in1", "in2", "in3", "in4", "vcc", "gnd"],
     };
     this.onmessage?.({
       data: {
@@ -78,7 +79,9 @@ private emitSnapshot(): void {
                   ? { type: "relay", energized: false }
                   : c.kind === "transistor"
                     ? { type: "transistor", conducting: false }
-                    : { type: "pico_board" },
+                    : c.kind === "stepper"
+                      ? { type: "stepper", angleDegrees: 0, direction: "none", stepsPerSecond: 0 }
+                      : { type: "pico_board" },
           pins: (pinLabels[c.kind] ?? []).map((label) => ({
             id: `${c.id}:${label}`,
             label,
@@ -146,13 +149,14 @@ afterEach(() => {
 });
 
 describe("App (worker lifecycle + palette placement)", () => {
-  it("renders the palette with LED, Button, Relay, and Transistor (no PicoBoard) and replays the demo wiring on first spawn", () => {
+  it("renders the palette with LED, Button, Relay, Transistor, and Stepper (no PicoBoard) and replays the demo wiring on first spawn", () => {
     render(<App />);
 
     expect(screen.getByTestId("palette-led")).toBeTruthy();
     expect(screen.getByTestId("palette-button")).toBeTruthy();
     expect(screen.getByTestId("palette-relay")).toBeTruthy();
     expect(screen.getByTestId("palette-transistor")).toBeTruthy();
+    expect(screen.getByTestId("palette-stepper")).toBeTruthy();
     expect(screen.queryByTestId("palette-pico_board")).toBeNull();
 
     // The first spawn rebuilt the whole demo topology.

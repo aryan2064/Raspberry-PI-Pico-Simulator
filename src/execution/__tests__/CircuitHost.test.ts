@@ -344,3 +344,73 @@ describe("CircuitHost machine.PWM bridge (analog duty channel)", () => {
     expect(snap.conflictedPinIds).toHaveLength(0);
   });
 });
+
+type StepperInfo = {
+  type: "stepper";
+  angleDegrees: number;
+  direction: "CW" | "CCW" | "none";
+  stepsPerSecond: number;
+};
+
+describe("CircuitHost stepper: 2 full cycles forward and back through four GPIOs", () => {
+  let host: CircuitHost;
+
+  beforeEach(() => {
+    host = new CircuitHost();
+    addDemoBoard(host);
+    host.handleEdit({ type: "addComponent", componentId: "motor", kind: "stepper" });
+    connect(host, "w1", "board", "GPIO0", "motor", "in1");
+    connect(host, "w2", "board", "GPIO1", "motor", "in2");
+    connect(host, "w3", "board", "GPIO2", "motor", "in3");
+    connect(host, "w4", "board", "GPIO3", "motor", "in4");
+    [0, 1, 2, 3].forEach((gpio) => host.setupPin(gpio, 1)); // OUT, as a motor driver does
+  });
+
+  // Writes one 4-bit pattern to GPIO0..3 (IN1..IN4) and steps the sim once at
+  // 1/20s — the whole circuit resolves and the motor's sense pins land in the
+  // right state before its update() runs in the same tick.
+  function drive(pattern: number): void {
+    const bits = [(pattern >> 3) & 1, (pattern >> 2) & 1, (pattern >> 1) & 1, pattern & 1];
+    bits.forEach((bit, i) => host.writePin(i, bit));
+    host.tick(1 / 20);
+  }
+
+  function motorInfo(): StepperInfo {
+    return renderInfoById(host, "motor") as StepperInfo;
+  }
+
+  it("exposes the four control inputs plus inert vcc/gnd in the snapshot", () => {
+    const pins = snapshot(host)
+      .components.find((c) => c.id === "motor")!
+      .pins.map((p) => p.label);
+    expect(pins).toEqual(["in1", "in2", "in3", "in4", "vcc", "gnd"]);
+  });
+
+  it("tracks two full drive cycles (1024 full-step units), then reverses cleanly back to 0", () => {
+    drive(0b1010); // anchor: locks position without moving
+    expect(motorInfo()).toEqual({
+      type: "stepper",
+      angleDegrees: 0,
+      direction: "none",
+      stepsPerSecond: 0,
+    });
+
+    // Two full passes of the 4-state full-step table (8 recognized steps).
+    const CYCLES: readonly number[] = [0b0110, 0b0101, 0b1001, 0b1010];
+    for (let cycle = 0; cycle < 2; cycle++) {
+      for (const pattern of CYCLES) drive(pattern);
+    }
+    expect(motorInfo().angleDegrees).toBeCloseTo(8 * (360 / 2048), 9);
+    expect(motorInfo().direction).toBe("CW");
+    // Steady stepping at 1/20s between states -> 20 steps/sec.
+    expect(motorInfo().stepsPerSecond).toBeCloseTo(20, 9);
+
+    // Two full passes backward (8 steps) subtract right back to the origin.
+    const BACK: readonly number[] = [0b1001, 0b0101, 0b0110, 0b1010];
+    for (let cycle = 0; cycle < 2; cycle++) {
+      for (const pattern of BACK) drive(pattern);
+    }
+    expect(motorInfo().angleDegrees).toBeCloseTo(0, 9);
+    expect(motorInfo().direction).toBe("CCW");
+  });
+});
