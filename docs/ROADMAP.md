@@ -348,8 +348,12 @@ before deciding to skip ahead again.
   `CONFLICT`/short state (and any "forbidden wiring" enforcement) remains
   deferred.
 - The `HasStimulus<T>` interface pattern for sensor-style components is
-  documented (`docs/ARCHITECTURE.md`) but not implemented. Implement it
-  only alongside the first real sensor component.
+  documented (`docs/ARCHITECTURE.md`). The first real sensor —
+  `PIRSensor` — is implemented and takes a user-driven
+  `triggerMotion()` stimulus via the worker `press` message (see the
+  ARCHITECTURE section); no generic parameterized stimulus (e.g. a
+  distance-in-cm sensor) exists yet, so `HasStimulus<T>` itself remains
+  unimplemented until one does.
 - Canvas editor polish (measured auto-layout, richer styling for the
   palette/first-run tutorial) is still deferred; deleting placed
   components is done, so the remaining editor concern is aesthetics, not

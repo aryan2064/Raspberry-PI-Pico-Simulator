@@ -10,4 +10,5 @@ export type RenderInfo =
   | { type: "relay"; energized: boolean }
   | { type: "transistor"; conducting: boolean }
   | { type: "stepper"; angleDegrees: number; direction: "CW" | "CCW" | "none"; stepsPerSecond: number }
+  | { type: "pir"; motionActive: boolean }
   | { type: "pico_board" };

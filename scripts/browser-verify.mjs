@@ -58,6 +58,16 @@ const EXPECTED_STEPPER_OFFSETS = {
   gnd: { x: 63.559, y: 96.012 },
 };
 
+// PIR pin anchors: mirror of PIRSensorView's pirPinOffsets, straight from the
+// vendored element's own pinInfo (UBS-7 did a U-turn at the lens: pin order
+// vcc/out/gnd along one common lead row at y=92). Module order matches the
+// physical HC-SR501: VCC on the left, OUT center, GND right.
+const EXPECTED_PIR_OFFSETS = {
+  vcc: { x: 36.178, y: 92 },
+  out: { x: 45.9175, y: 92 },
+  gnd: { x: 55.6415, y: 92 },
+};
+
 const profile = join(process.env.TEMP ?? ".", "opencode", `edge-cdp-${Date.now()}`);
 mkdirSync(profile, { recursive: true });
 
@@ -156,6 +166,7 @@ const state = () =>
         stepperAngle: q('[data-testid="stepper-body"]')?.getAttribute('data-angle') ?? null,
         stepperDirection: q('[data-testid="stepper-body"]')?.getAttribute('data-direction') ?? null,
         stepperStepsPerSecond: q('[data-testid="stepper-body"]')?.getAttribute('data-steps-per-second') ?? null,
+        pirMotion: q('[data-testid="pir-body"]')?.getAttribute('data-motion-active') ?? null,
         stepperRotate: (() => {
           const el = q('[data-testid="stepper-body"] app-stepper-motor');
           const p = el?.shadowRoot?.querySelector('#arrow-path');
@@ -421,8 +432,10 @@ const state = () =>
     s.paletteItems.includes("palette-led") &&
       s.paletteItems.includes("palette-button") &&
       s.paletteItems.includes("palette-relay") &&
-      s.paletteItems.includes("palette-transistor"),
-    "palette should list LED, Button, Relay, and Transistor, got " + s.paletteItems
+      s.paletteItems.includes("palette-transistor") &&
+      s.paletteItems.includes("palette-stepper") &&
+      s.paletteItems.includes("palette-pir"),
+    "palette should list LED, Button, Relay, Transistor, Stepper, and PIR, got " + s.paletteItems
   );
   assert(
     !s.paletteItems.includes("palette-pico_board"),
@@ -959,17 +972,134 @@ const state = () =>
   const reg = await evaljs(`(()=>({
     pkg: !!customElements.get('wokwi-stepper-motor'),
     vendored: !!customElements.get('app-stepper-motor'),
-    defineErrors: (window.__execErrors||[]).filter((m)=>/define|custom element|app-stepper-motor/i.test(m)),
+    pirPkg: !!customElements.get('wokwi-pir-motion-sensor'),
+    pirVendored: !!customElements.get('app-pir-motion-sensor'),
+    defineErrors: (window.__execErrors||[]).filter((m)=>/define|custom element|app-stepper-motor|app-pir-motion-sensor/i.test(m)),
   }))()`);
   console.log("step11 registration:", JSON.stringify(reg));
   assert(
-    reg.pkg && reg.vendored,
-    "both wokwi-stepper-motor and app-stepper-motor must be registered, got " + JSON.stringify(reg)
+    reg.pkg && reg.vendored && reg.pirPkg && reg.pirVendored,
+    "stepper and PIR package+vendored elements must all be registered, got " + JSON.stringify(reg)
   );
   assert(
     reg.defineErrors.length === 0,
     "no customElements.define console errors allowed, got " + JSON.stringify(reg.defineErrors)
   );
+
+  // ---- 12. PIR motion sensor (vendored app-pir-motion-sensor). The dome is
+  //         the stimulus: clicking it routes through the worker's press message
+  //         into PIRSensor.triggerMotion, which drives `out` HIGH immediately
+  //         for the 5s holdSeconds. The dome glow + data-motion attribute must
+  //         track that exactly, a board GPIO wired to `out` must read HIGH
+  //         right after the trigger and LOW again when the hold expires (the
+  //         worker's own 60fps loop keeps ticking while the UI idles, so the
+  //         expiry is deterministic). This runs in the post-reload session, so
+  //         this drop is the only placed component (placed-1).
+  await dropKindAt('pir', 900, 160);
+  s = await waitFor("dropped PIR should render", (x) => x.pirMotion !== null);
+  assert(s.pirMotion === "false", "PIR should start motion-inactive, got " + s.pirMotion);
+  assert(s.placedBodies === 1, "after reload the PIR should be the only placed component, got " + s.placedBodies);
+
+  // Sub-pixel pin alignment: the three canvas markers must sit on the vendored
+  // element's own pinInfo (vcc/out/gnd along the single lead row at y=92) and
+  // the relabel must be vcc, out, gnd.
+  const pirGeo = await evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const sr = stage.getBoundingClientRect();
+    const scale = sr.width / 1200;
+    const body = document.querySelector('[data-testid="body-placed-1"]').getBoundingClientRect();
+    const origin = { x: (body.left - sr.left) / scale, y: (body.top - sr.top) / scale };
+    const el = document.querySelector('[data-testid="body-placed-1"] app-pir-motion-sensor');
+    const info = el?.pinInfo ?? [];
+    const byName = Object.fromEntries(info.map((pi) => [pi.name, { x: pi.x, y: pi.y }]));
+    const aligns = info.map((pi) => {
+      const m = document.querySelector('[data-testid="pin-placed-1-'+pi.name+'"] circle').getBoundingClientRect();
+      const got = { x: (m.left + m.width / 2 - sr.left) / scale, y: (m.top + m.height / 2 - sr.top) / scale };
+      const want = { x: origin.x + pi.x, y: origin.y + pi.y };
+      return { name: pi.name, got, want, dx: got.x - want.x, dy: got.y - want.y };
+    });
+    return { elTag: el?.tagName.toLowerCase() ?? null, names: info.map((pi) => pi.name), byName, aligns };
+  })()`);
+  console.log("step12 PIR pin geometry:", JSON.stringify(pirGeo));
+  assert(
+    pirGeo.elTag === "app-pir-motion-sensor",
+    "PIR body must be the vendored app-pir-motion-sensor, got " + pirGeo.elTag
+  );
+  assert(
+    JSON.stringify([...pirGeo.names].sort()) === JSON.stringify(["gnd", "out", "vcc"].sort()),
+    "vendored element must expose three pins vcc/out/gnd, got " + JSON.stringify(pirGeo.names)
+  );
+  for (const [name, off] of Object.entries(EXPECTED_PIR_OFFSETS)) {
+    const live = pirGeo.byName[name];
+    assert(
+      live && Math.abs(live.x - off.x) < 0.01 && Math.abs(live.y - off.y) < 0.01,
+      "pirPinOffsets must match the element pinInfo for " + name + ", got " + JSON.stringify(live)
+    );
+  }
+  for (const a of pirGeo.aligns) {
+    assert(
+      Math.abs(a.dx) < 1 && Math.abs(a.dy) < 1,
+      "pin " + a.name + " must align sub-pixel on its lead, got dx=" + a.dx.toFixed(3) + " dy=" + a.dy.toFixed(3)
+    );
+  }
+
+  const domeFill = async () =>
+    await evaljs(`(()=>{
+      const r = document.querySelector('[data-testid="body-placed-1"] app-pir-motion-sensor')?.shadowRoot;
+      if (!r) return null;
+      const circles = [...r.querySelectorAll('circle')];
+      return { outer: circles[0]?.getAttribute('fill') ?? null, inner: circles[1]?.getAttribute('fill') ?? null };
+    })()`);
+  const idleDome = await domeFill();
+  assert(
+    idleDome && idleDome.outer === "#d3d5d6" && idleDome.inner === "#d9e1e1",
+    "PIR dome should render idle gray before any motion, got " + JSON.stringify(idleDome)
+  );
+
+  await wire('pin-placed-1-out', 'pin-board-GPIO8');
+  console.log("step12 wired:", JSON.stringify(await state()));
+
+  const readGpio8 = async (tag) => {
+    await evaljs(`(()=>{
+      const ta = document.querySelector('textarea');
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
+      setter.call(ta, 'import machine\\nprint("${tag}=" + str(machine.Pin(8, machine.Pin.IN).value()))\\n');
+      ta.dispatchEvent(new Event('input',{bubbles:true}));
+      return true;
+    })()`);
+    await evaljs(`(()=>{ [...document.querySelectorAll('button')]
+      .find((x)=>x.textContent.trim()==='Run').click(); return true; })()`);
+    s = await waitFor("GPIO8 read (" + tag + ") should print", (x) => x.output?.includes(tag + "="), 20000);
+    return (s.output.split(tag + "=").pop() ?? "").match(/^([01])/)?.[1] ?? null;
+  };
+  const before = await readGpio8("PIR_BEFORE");
+  assert(before === "0", "GPIO8 should read LOW before any motion, got " + before);
+
+  await evaljs(`(()=>{
+    const b = document.querySelector('[data-testid="pir-body"]');
+    b.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+    b.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+    return true;
+  })()`);
+  s = await waitFor("dome click should trigger motion", (x) => x.pirMotion === "true", 5000);
+  const activeDome = await domeFill();
+  assert(
+    activeDome && activeDome.outer === "#ffb74d" && activeDome.inner === "#ffa726",
+    "PIR dome should glow amber while detecting, got " + JSON.stringify(activeDome)
+  );
+  console.log("step12 triggered:", JSON.stringify(s));
+
+  const after = await readGpio8("PIR_AFTER");
+  assert(after === "1", "GPIO8 should read HIGH while motionActive, got " + after);
+
+  s = await waitFor("5s hold should expire back to idle", (x) => x.pirMotion === "false", 12000);
+  const expiredDome = await domeFill();
+  assert(
+    expiredDome && expiredDome.outer === "#d3d5d6" && expiredDome.inner === "#d9e1e1",
+    "PIR dome should revert to idle gray after the hold expires, got " + JSON.stringify(expiredDome)
+  );
+  assert(!s.issue, "unexpected issue banner after PIR step: " + s.issue);
+  console.log("step12 expiry:", JSON.stringify(s));
 
   console.log("ALL BROWSER CHECKS PASSED");
 } catch (err) {

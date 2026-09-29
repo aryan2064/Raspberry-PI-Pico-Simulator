@@ -162,9 +162,15 @@ official Fritzing part, adopted as a repo asset). Vendor source only
 
 5. **Decide if this component needs a stimulus input** (i.e., is it a
    sensor-like component with no natural "driver" of its own, needing
-   a human or another component to feed it fake real-world data?). If
-   so, implement the `HasStimulus<T>` interface described in
-   `docs/ARCHITECTURE.md` — don't invent a different pattern for this.
+   a human or another component to feed it fake real-world data?).
+   Sensor components have no input pin to react to — their stimulus
+   travels the worker `press` message, so add a placeable kind and
+   route `press` to a public stimulus method (e.g.
+   `PIRSensor.triggerMotion()`), the concrete pattern `PIRSensor`
+   established. Keep a future parametric sensor in mind: the generic
+   `HasStimulus<T>` interface in `docs/ARCHITECTURE.md` is documented
+   for when a stimulus has real parameters (distance, level) — don't
+   force a parameterless gesture into it.
    Most components (anything that's driven purely by its pins, like
    `LED`) don't need this.
 
@@ -209,9 +215,10 @@ official Fritzing part, adopted as a repo asset). Vendor source only
 - [ ] Passive switch? Implements `HasInternalConnections`, not pin-driving
 - [ ] State-driven switch? Control pin is MODE_IN, flag set in `update()`, decide between `[pair]` / `[pair]` or `[]` per state
 - [ ] Sequence-sensing stateful part? Reads multi-pin pattern in `update()`, hardcoded telltale tables, anchors first contact, ignores garbage, stores angle/direction/rate as fields
+- [ ] Sensor (no input pin) part? Route the worker `press` message to a public stimulus method like `PIRSensor.triggerMotion()`, drive its OUT pin immediately, and mirror the state for `getRenderInfo()`
 - [ ] Added a view (`wokwi` element or static SVG, official part where one exists) with pin offsets + state testids
 - [ ] Wired `renderComponentView` + palette preview
-- [ ] Considered whether `HasStimulus<T>` applies
+- [ ] Considered whether a stimulus input (`HasStimulus<T>` / a press-routed stimulus method) applies
 - [ ] Considered whether cross-tick state is needed
 - [ ] Wrote a Vitest test covering at least driven + floating cases
 - [ ] No imports from `ui/` or `execution/` anywhere in the new file

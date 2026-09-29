@@ -9,6 +9,7 @@ import { LedView, ledPinOffsets } from "./components/LedView";
 import { RelayView, relayPinOffsets } from "./components/RelayView";
 import { TransistorView, transistorPinOffsets } from "./components/TransistorView";
 import { StepperView, stepperPinOffsets } from "./components/StepperMotorView";
+import { PIRSensorView, pirPinOffsets } from "./components/PIRSensorView";
 import {
   PicoBoardView,
   picoPinOffsets,
@@ -24,6 +25,7 @@ const PIN_OFFSETS: Record<RenderInfo["type"], PinOffsetMap> = {
   relay: relayPinOffsets,
   transistor: transistorPinOffsets,
   stepper: stepperPinOffsets,
+  pir: pirPinOffsets,
   pico_board: picoPinOffsets,
 };
 
@@ -33,6 +35,7 @@ const PIN_STYLE: Record<RenderInfo["type"], PinMarkerStyle> = {
   relay: { r: 5, fill: "#888", stroke: "#555" },
   transistor: { r: 5, fill: "#888", stroke: "#555" },
   stepper: { r: 5, fill: "#888", stroke: "#555" },
+  pir: { r: 5, fill: "#888", stroke: "#555" },
   pico_board: { r: 4, fill: "#d8b03c", stroke: "#4a3a0a" },
 };
 
@@ -119,6 +122,15 @@ function renderComponentView(
       return <TransistorView key={componentId} renderInfo={renderInfo} selected={selected} />;
     case "stepper":
       return <StepperView key={componentId} renderInfo={renderInfo} selected={selected} />;
+    case "pir":
+      return (
+        <PIRSensorView
+          key={componentId}
+          renderInfo={renderInfo}
+          selected={selected}
+          onTrigger={() => onPress(componentId)}
+        />
+      );
     case "pico_board":
       return (
         <svg
@@ -366,6 +378,7 @@ export function CircuitCanvas({
       case "relay":
       case "transistor":
       case "stepper":
+      case "pir":
         break;
       default:
         return; // e.g. non-palette payloads must not be placed

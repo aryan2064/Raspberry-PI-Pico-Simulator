@@ -5,7 +5,7 @@ import type { PinMode, PinPull } from "../engine";
 // messages — never JS object references. Every message shape in both
 // directions lives here so worker and main thread stay in lockstep.
 
-export type ComponentKind = "pico_board" | "led" | "button" | "relay" | "transistor" | "stepper";
+export type ComponentKind = "pico_board" | "led" | "button" | "relay" | "transistor" | "stepper" | "pir";
 
 // A pin as seen from the main thread: component id + pin label. Pin OBJECTS
 // live in the worker's Circuit; the main thread never holds a reference.

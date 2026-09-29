@@ -12,6 +12,11 @@ import "@wokwi/elements";
 // the source (see docs/DECISIONS.md). Kept out of individual views so Vitest/
 // jsdom never executes the web-component code.
 import "./vendor/wokwi/stepper-motor-element";
+// Registers the vendored, modified PIR element (app-pir-motion-sensor) — the
+// package's PIR is a purely static SVG with no state properties, so we
+// vendor+modify the source to reflect detected motion as a dome glow (see
+// docs/DECISIONS.md). Kept out of individual views for the same jsdom reason.
+import "./vendor/wokwi/pir-motion-sensor-element";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

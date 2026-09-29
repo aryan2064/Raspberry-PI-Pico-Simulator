@@ -89,9 +89,9 @@ that's the one rule this project cannot bend on. See
       (real-Pyodide end-to-end; run with `npm run verify:python`).
       `src/test/setup.ts` patches jsdom's missing `crypto.randomUUID`
       (the engine's `newId()`), registered via `test.setupFiles`.
-Current totals: **113 passing + 1 skipped** (18 Circuit / 7
+Current totals: **122 passing + 1 skipped** (18 Circuit / 7
 PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
-4 transistor / 6 stepper / 22 CircuitHost / 26 canvas /
+4 transistor / 6 stepper / 5 PIRSensor / 25 CircuitHost / 27 canvas /
 9 App; Pyodide.integration skipped by default — run it with
 `npm run verify:python`).
 - [x] Analog value channel on `Pin` (`analogValue: number | null`, 0–1
@@ -144,7 +144,8 @@ PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
       attributes as strings. They are a normal npm dependency (a
       vendoring attempt was evaluated and reverted as unnecessary since
       the package ships pre-compiled JS; see `docs/DECISIONS.md`); the
-      stepper is the one justified vendoring exception (see below). The
+      stepper and the PIR sensor are the only justified vendoring
+      exceptions so far (both covered in `docs/DECISIONS.md`). The
       pin offsets come from the elements' `pinInfo`. The board is a
       static SVG: Raspberry Pi's official `Pico-R3-Fritzing.fzpz`
       breadboard view (`svg.breadboard.rpi_pico-tht_1_breadboard.svg`,
@@ -205,7 +206,7 @@ PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
 - [x] Component palette + drag interaction
       (`src/ui/ComponentPalette.tsx`, `src/App.tsx`,
 `src/App.test.tsx`): the palette offers LED, Button, Relay,
-       Transistor, and Stepper (no second
+       Transistor, Stepper, and PIR (no second
        board — PicoBoard stays a singleton) as HTML5 drag sources; dropping
       on the canvas converts client coords to stage coords via
       `clientToStagePoint()` (`getBoundingClientRect`-based, with a
@@ -350,11 +351,48 @@ test, and `browser-verify.mjs` steps 10–11 (drop + wire 4
          shadow-DOM `#arrow-path` transform tracked from
          `rotate(0,10.2,10.2)` through `rotate(1.40625,10.2,10.2)` and
          back; the six pins align to `bodyOrigin + pinInfo` sub-pixel,
-         and both `wokwi-stepper-motor`/`app-stepper-motor` register
-         with no define errors).
+and both `wokwi-stepper-motor`/`app-stepper-motor` register
+          with no define errors).
+- [x] `PIRSensor` — an HC-SR501-style motion module and the first
+       **stimulus-driven** component
+       (`src/engine/components/PIRSensor.ts`): pins `vcc`/`gnd` (UNSET,
+       wiring realism — same rule as the relay's coil pins) + `out`
+       (active-high OUT driver, idles LOW). It has no input pin to react
+       to — the stimulus is a user gesture delivered through the worker
+       `press` message (the shared press-able-anything path Button uses):
+       `triggerMotion()` marks motion detected, starts a `holdSeconds`
+       hold (default 5 s, configurable) and writes `out` HIGH
+       **immediately**, so a net resolve right after the call already
+       reads HIGH (pull-resistor/PWM immediacy precedent). The hold is
+       burned down by accumulated `update(dt)`; `retriggerable`
+       (default true) restarts the full hold from a new trigger even
+       mid-hold, otherwise a mid-hold trigger is ignored. Reports
+       `{ type:"pir", motionActive }`. Does NOT implement
+       `HasStimulus<T>` yet — a parameterless gesture isn't a
+       parameterizable stimulus (see `docs/ARCHITECTURE.md`). View is a
+       vendored+modified element `app-pir-motion-sensor` (in
+       `src/vendor/wokwi/`): the published `wokwi-pir-motion-sensor` is
+       a purely static SVG with no state properties, so its source is
+       vendored + extended with a `motionActive` Boolean (dome/lens glow
+       warm amber/red while detecting), re-decorated for our
+       `useDefineForClassFields` tsconfig, and registered under our own
+       tag; the three leads are relabeled `vcc`/`out`/`gnd` with the
+       upstream coordinates intact (the `pinInfo` coords ARE the
+       `pirPinOffsets` canvas surface). The body is clickable
+       (`data-motion-active` attribute). Palette entry, canvas
+       offsets/render/drop, and worker `addComponent` + `press` dispatch
+       wired. Verified by `PIRSensor.test.ts` (5: idle pin modes + LOW,
+       immediate HIGH through resolveNow, hold expiry via accumulated dt,
+       retriggerable extension past original expiry, non-retriggerable
+ignore), a CircuitHost e2e (press → OUT HIGH on a wired GPIO0 IN
+        → expire back to LOW), canvas render/click + drop tests, the
+        App palette test, and `browser-verify.mjs` step 12 (post-reload
+        drop → sub-pixel pins vs pinInfo → dome click → GPIO8 read HIGH
+        → 5 s hold expires → dome glow reverts; registration check
+        includes `app-pir-motion-sensor`).
 - [ ] Validation / error states beyond conflict detection (undeclared
        pins, unmapped Python pin numbers, etc.) — not started.
-- [ ] Component library beyond LED/Button/Relay/Transistor/Stepper — not
+- [ ] Component library beyond LED/Button/Relay/Transistor/Stepper/PIR — not
        started (intentionally; see "Don't pre-build" rule in
        `docs/ROADMAP.md`)
 

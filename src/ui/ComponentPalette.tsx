@@ -3,6 +3,7 @@ import type { ComponentKind } from "../execution/messages";
 import { RelayArt, RELAY_W, RELAY_H } from "./components/RelayView";
 import { TransistorArt, TRANSISTOR_W, TRANSISTOR_H } from "./components/TransistorView";
 import { StepperArt } from "./components/StepperMotorView";
+import { PIRArt, PIR_W, PIR_H } from "./components/PIRSensorView";
 
 // Custom MIME type used for palette -> canvas native-drag payloads. Using a
 // non-standard type (rather than e.g. "text/plain") keeps unrelated page
@@ -11,7 +12,7 @@ export const COMPONENT_MIME = "application/x-pico-component";
 
 type PaletteKind = Extract<
   ComponentKind,
-  "led" | "button" | "relay" | "transistor" | "stepper"
+  "led" | "button" | "relay" | "transistor" | "stepper" | "pir"
 >;
 
 const PALETTE_ITEMS: Array<{ kind: PaletteKind; label: string; hint: string }> = [
@@ -20,6 +21,7 @@ const PALETTE_ITEMS: Array<{ kind: PaletteKind; label: string; hint: string }> =
   { kind: "relay", label: "Relay", hint: "NC→COM normally; NO when in is HIGH" },
   { kind: "transistor", label: "NPN", hint: "conducts when base is HIGH" },
   { kind: "stepper", label: "Stepper", hint: "28BYJ-48 + ULN2003; IN1–IN4 sequences spin it" },
+  { kind: "pir", label: "PIR", hint: "click the dome to simulate motion; OUT HIGH while detected" },
 ];
 
 // Small live previews of the real wokwi elements (led/button) plus the
@@ -71,6 +73,20 @@ function PalettePreview({ kind }: { kind: PaletteKind }) {
         }}
       >
         <StepperArt angleDegrees={0} />
+      </div>
+    );
+  }
+  if (kind === "pir") {
+    return (
+      <div
+        style={{
+          ...previewStyle,
+          width: PIR_W * 0.6,
+          height: PIR_H * 0.6,
+          marginBottom: 4,
+        }}
+      >
+        <PIRArt motionActive={false} />
       </div>
     );
   }

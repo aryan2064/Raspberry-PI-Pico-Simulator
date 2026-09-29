@@ -146,7 +146,7 @@ describe("CircuitHost (worker-side message handling)", () => {
     ).toThrow(/No component with id "nope"/);
     expect(() =>
       host.handleEdit({ type: "press", componentId: "led" })
-    ).toThrow(/is not a button/);
+    ).toThrow(/is not pressable/);
   });
 
   it("removeComponent removes the component and everything wired to its pins", () => {
@@ -412,5 +412,53 @@ describe("CircuitHost stepper: 2 full cycles forward and back through four GPIOs
     }
     expect(motorInfo().angleDegrees).toBeCloseTo(0, 9);
     expect(motorInfo().direction).toBe("CCW");
+  });
+});
+
+describe("CircuitHost PIR motion sensor: press triggers OUT HIGH on a wired GPIO, then expires", () => {
+  let host: CircuitHost;
+
+  beforeEach(() => {
+    host = new CircuitHost();
+    addDemoBoard(host);
+    host.handleEdit({ type: "addComponent", componentId: "sensor", kind: "pir" });
+    connect(host, "w1", "sensor", "out", "board", "GPIO0");
+    host.setupPin(0, 0); // GPIO0 as IN, reading the sensor's OUT
+  });
+
+  function pirInfo(): { type: "pir"; motionActive: boolean } {
+    return renderInfoById(host, "sensor") as { type: "pir"; motionActive: boolean };
+  }
+
+  it("exposes vcc/out/gnd in the snapshot and idles motion-inactive", () => {
+    const pins = snapshot(host)
+      .components.find((c) => c.id === "sensor")!
+      .pins.map((p) => p.label);
+    expect(pins).toEqual(["vcc", "out", "gnd"]);
+    expect(pirInfo()).toEqual({ type: "pir", motionActive: false });
+    expect(host.readPin(0)).toBe(0); // idle OUT drives the GPIO LOW
+  });
+
+  it("a press trigger propagates OUT HIGH to GPIO0 and the hold expires after a dive", () => {
+    // The press gesture is the motion stimulus — same message a view sends.
+    host.handleEdit({ type: "press", componentId: "sensor" });
+    expect(pirInfo()).toEqual({ type: "pir", motionActive: true });
+
+    // Net resolution + one update tick land the HIGH end-to-end.
+    host.tick(1 / 60);
+    expect(host.readPin(0)).toBe(1);
+
+    // Just inside the default 5s hold it stays detected, then drops LOW.
+    host.tick(4.9);
+    expect(host.readPin(0)).toBe(1);
+    host.tick(0.2);
+    expect(pirInfo()).toEqual({ type: "pir", motionActive: false });
+    expect(host.readPin(0)).toBe(0);
+  });
+
+  it("rejects press on a non-pressable component like the board", () => {
+    expect(() => host.handleEdit({ type: "press", componentId: "board" })).toThrow(
+      'Component "board" is not pressable'
+    );
   });
 });

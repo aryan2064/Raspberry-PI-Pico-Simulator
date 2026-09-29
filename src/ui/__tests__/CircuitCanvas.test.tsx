@@ -270,6 +270,33 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     }
   });
 
+  it("renders a PIR body with its motion state and all three pins, and relays a click as press", () => {
+    const snapshot: SnapshotMessage = {
+      type: "snapshot",
+      conflictedPinIds: [],
+      components: [
+        { id: "board", renderInfo: { type: "pico_board" }, pins: Array.from({ length: 3 }, (_, i) => ({ id: `board:GPIO${i}`, label: `GPIO${i}` })) },
+        {
+          id: "sensor",
+          renderInfo: { type: "pir", motionActive: true },
+          pins: ["vcc", "out", "gnd"].map((label) => ({ id: `sensor:${label}`, label })),
+        },
+      ],
+    };
+    const positions = { board: { x: 40, y: 40 }, sensor: { x: 400, y: 80 } };
+    const onPress = vi.fn();
+    renderCanvas(snapshot, [], { onPress }, positions);
+
+    expect(screen.getByTestId("pir-body").getAttribute("data-motion-active")).toBe("true");
+    for (const label of ["vcc", "out", "gnd"]) {
+      expect(screen.getByTestId(`pin-sensor-${label}`)).toBeTruthy();
+    }
+
+    // A click on the dome is the motion stimulus — the press callback fires.
+    fireEvent.mouseDown(screen.getByTestId("pir-body"));
+    expect(onPress).toHaveBeenCalledWith("sensor");
+  });
+
   it("relays button press/release to the worker callbacks", () => {
     const onPress = vi.fn();
     const onRelease = vi.fn();
@@ -374,7 +401,7 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     expect(onPlaceComponent).not.toHaveBeenCalled();
   });
 
-  it("places relay, transistor, and stepper drops like any other palette part", () => {
+  it("places relay, transistor, stepper, and PIR drops like any other palette part", () => {
     const onPlaceComponent = vi.fn();
     renderCanvas(makeSnapshot(), makeConnections(), { onPlaceComponent });
 
@@ -382,11 +409,13 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     dropPaletteComponent(svg, "relay", 300, 200);
     dropPaletteComponent(svg, "transistor", 500, 400);
     dropPaletteComponent(svg, "stepper", 700, 600);
+    dropPaletteComponent(svg, "pir", 900, 300);
 
-    expect(onPlaceComponent).toHaveBeenCalledTimes(3);
+    expect(onPlaceComponent).toHaveBeenCalledTimes(4);
     expect(onPlaceComponent).toHaveBeenCalledWith({ x: 300, y: 200 }, "relay");
     expect(onPlaceComponent).toHaveBeenCalledWith({ x: 500, y: 400 }, "transistor");
     expect(onPlaceComponent).toHaveBeenCalledWith({ x: 700, y: 600 }, "stepper");
+    expect(onPlaceComponent).toHaveBeenCalledWith({ x: 900, y: 300 }, "pir");
   });
 
   it("drags an existing component body to reposition it", () => {

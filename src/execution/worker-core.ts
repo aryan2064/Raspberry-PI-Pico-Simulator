@@ -1,4 +1,4 @@
-import { Button, Circuit, LED, PicoBoard, Relay, StepperMotor, Transistor } from "../engine";
+import { Button, Circuit, LED, PicoBoard, PIRSensor, Relay, StepperMotor, Transistor } from "../engine";
 import type { Pin } from "../engine";
 import type {
   AddComponentMessage,
@@ -101,6 +101,9 @@ export class CircuitHost {
       case "stepper":
         this.circuit.addComponent(new StepperMotor(msg.componentId));
         break;
+      case "pir":
+        this.circuit.addComponent(new PIRSensor({}, msg.componentId));
+        break;
     }
   }
 
@@ -145,8 +148,19 @@ export class CircuitHost {
     this.circuit.resolveNets();
   }
 
+  // The "press" gesture is shared by every stimulable component: a Button
+  // closes its contacts, a PIRSensor reports detected motion. Each handles its
+  // own semantics — the PIR has no release, which is why only buttons go
+  // through release().
   press(msg: PressReleaseMessage): void {
-    this.buttonFor(msg.componentId).press();
+    const component = this.componentById(msg.componentId);
+    if (component instanceof Button) {
+      component.press();
+    } else if (component instanceof PIRSensor) {
+      component.triggerMotion();
+    } else {
+      throw new Error(`Component "${msg.componentId}" is not pressable`);
+    }
   }
 
   release(msg: PressReleaseMessage): void {

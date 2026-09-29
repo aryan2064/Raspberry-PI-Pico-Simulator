@@ -9,5 +9,7 @@ export { Button } from "./components/Button";
 export { Relay } from "./components/Relay";
 export { Transistor } from "./components/Transistor";
 export { StepperMotor } from "./components/StepperMotor";
+export { PIRSensor } from "./components/PIRSensor";
+export type { PIRSensorOptions } from "./components/PIRSensor";
 export type { PinMode, PinValue, PinPull } from "./Pin";
 export type { RenderInfo } from "./RenderInfo";

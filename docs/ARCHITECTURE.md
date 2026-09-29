@@ -239,12 +239,12 @@ that math is implemented **inside that component's own `update()`**,
 as a local special case — never as a general physics engine applied to
 every component.
 
-## Sensors / stimulus inputs (not yet built, documented for later)
+## Sensors / stimulus inputs (implemented: PIRSensor)
 
 Sensor-style components (proximity, PIR, etc.) have a concern that
 output-only components like LED don't: something has to supply a fake
 real-world stimulus (distance, motion) since there's no physical world
-to sense. The intended pattern, not yet implemented:
+to sense. The intended pattern:
 
 ```ts
 interface HasStimulus<TStimulus> {
@@ -253,9 +253,22 @@ interface HasStimulus<TStimulus> {
 ```
 
 An optional interface, not part of the `Component` base class, so
-non-sensor components never need to stub out a meaningless method. Only
-implement this when actually building the first sensor component — see
-`docs/ROADMAP.md`.
+non-sensor components never need to stub out a meaningless method.
+
+`PIRSensor` is the first real sensor and shows the concrete shape: it
+has no input pins to react to — the stimulus arrives as a **user
+gesture** reaching the engine through the existing worker `press`
+message. Its public `triggerMotion()` is the stimulus entry point
+(a one-shot "motion detected" — no booleans to hold or ranges to set),
+kept as a named method rather than a generic `setStimulus(undefined)`
+since it carries the domain meaning. The generic `HasStimulus<T>`
+interface remains the documented target for a FUTURE sensor whose
+stimulus is genuinely parametric (e.g. distance in cm) when one is
+built — `PIRSensor` deliberately does not implement it yet rather than
+fit a parameterless gesture into a generic shape. The `press` message
+stays the shared out-of-band input path (Button's press, PIR's
+trigger), and `triggerMotion()` writes `out` immediately so a net
+resolve reveals the HIGH the same instant it is called.
 
 ## Python execution model (implemented)
 

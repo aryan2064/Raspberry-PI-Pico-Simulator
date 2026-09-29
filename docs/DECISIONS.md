@@ -409,7 +409,9 @@ blocker is found — and in that case document the specific blocker here,
   such a case: its published element exposes only four bipolar cosmetic
   pins (no `vcc`/`gnd`, no `in1`–`in4`), so its source is vendored and
   modified — with the decorator fix described above — under our own tag;
-  see the Stepper decision below.
+  see the Stepper decision below. The PIR motion sensor is the second
+  such case (published part is purely static — no state to reflect);
+  see the PIR decision below.
 
 Scope discipline: adopted only for LED + button, never to become "mix
 every visual language", and the canvas CSS is kept to
@@ -696,7 +698,7 @@ quirk.
 
 ---
 
-**Stepper view vendors + modifies `@wokwi/elements`' stepper as `app-stepper-motor` — the one justified vendoring exception**
+**Stepper view vendors + modifies `@wokwi/elements`' stepper as `app-stepper-motor` — the first justified vendoring exception (the PIR sensor is the second)**
 
 The motor component models the **module** the MCU drives: a 28BYJ-48
 unipolar stepper wired through a ULN2003 darlington board, exposed as
@@ -778,6 +780,76 @@ of adjacent states is adjacent in **exactly one** table, so a
 transition can never ambiguously match both — the motor can always
 decide which table it was driving. The tables are declared once and
 any further verification edits both lists in lockstep.
+
+---
+
+**PIR motion sensor vendors + modifies `@wokwi/elements`' PIR as `app-pir-motion-sensor` — a second justified vendoring exception**
+
+The HC-SR501-style module needs `vcc`/`out`/`gnd` surface pins and a
+motion-detected visual state. The published parts were checked before
+vendoring anything:
+
+- `wokwi-pir-motion-sensor` (in `@wokwi/elements` 1.9.2) is an **exact
+  physical match** for the HC-SR501 module: three leads in module order
+  (bottom row, left→right `VCC` x=36.178 / `OUT` x=45.9175 / `GND`
+  x=55.6415, all at y=92), viewBox 90.7×92.4 (24mm×24.448mm). But it
+  is a **purely static SVG** — zero reactive properties, no state, no
+  interactive anything — so it cannot reflect the engine's
+  "motion detected" OUT-HIGH condition at all. Verified by reading the
+  source and the installed package side by side: no other candidate in
+  the library is closer.
+- No near-adjacent wokwi part or Fritzing part ships a PIR with a
+  state visual; hand-drawing would forfeit the module-accurate dome art
+  (and the established "official part where one exists" rule).
+
+So the view is the **published element's source, vendored + extended**:
+same consequence as the stepper — the base art is right, the needed
+capability (a `motionActive` display property) is not. Therefore we
+compile `pir-motion-sensor-element.ts` ourselves under our own tag
+`app-pir-motion-sensor` (the package's `wokwi-pir-motion-sensor`
+registration stays untouched), applying the same decorator fix the
+stepper documented: lit's `@customElement` removed, the added
+`motionActive` Boolean lives in a static `properties` map + constructor
+default + `declare` field, registration is an explicit
+`customElements.define`. The three leads are relabeled `VCC`/`OUT`/`GND`
+→ `vcc`/`out`/`gnd` (engine names), coordinates unchanged — the element
+`pinInfo` IS the canvas marker surface (`pirPinOffsets`). When
+`motionActive` is set the dome/lens recolor to a warm amber/red alert
+glow (idle colors are upstream's exact values). Wokwi's MIT license is
+preserved with a `TODO` for public attribution, as with the stepper.
+
+**PIR sensor model: one boolean stimulus held for a configurable time — no sensing physics**
+
+The detection model is deliberately minimal (the point is teaching pin
+logic, not IR sensitivity):
+
+- Pins: `vcc`/`gnd` are inert UNSET (wiring realism, relay precedent);
+  `out` is an active-high OUT driver that **idles LOW** (never
+  floating) and goes HIGH only while motion is detected.
+- `triggerMotion()` is the entire stimulus: sets "detecting", starts a
+  `holdSeconds`-long hold (default **5 s**, a typical HC-SR501 trimmer
+  setting) and writes `out` HIGH **immediately** — a net resolve right
+  after the call already reads HIGH, the same immediacy requirement as
+  the pull-resistor and PWM fixes. No sensitivity/detection-distance
+  model, no warm-up, no ambient sensing.
+- The hold is burned down by accumulated `update(dt)` simulated time.
+  `retriggerable` (default **true**, like the HC-SR501's repeat
+  setting) restarts the full hold from a NEW trigger instant even
+  mid-hold; non-retriggerable ignores any trigger while already active
+  and just lets the original hold expire.
+
+**PIR stimulus rides the shared `press` gesture — and stays a named method, not `HasStimulus<T>`**
+
+The worker's `press` message is now a **press-able-anything** gesture:
+a `Button` closes its contacts, a `PIRSensor` sees motion. Each
+component owns its semantics; `release` remains button-only (a PIR has
+nothing to release). The PIR keeps its stimulus as a public
+`triggerMotion()` method rather than implementing the documented
+`HasStimulus<T>` interface — a parameterless one-shot gesture doesn't
+fit a `setStimulus(input)` shape (there is no input value to set), and
+forcing it in would trade honest meaning for interface completeness. A
+future genuinely-parametric sensor (distance, level) is the place to
+introduce `HasStimulus<T>` for real (see `docs/ARCHITECTURE.md`).
 
 **Stepper semantics: anchor on first contact, re-lock on the adjacent table, ignore anything else**
 
