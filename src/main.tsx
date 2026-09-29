@@ -7,6 +7,11 @@ import "./index.css";
 // Vitest/jsdom never has to execute the web-component library — the tags it
 // defines are only used at runtime in a real browser.
 import "@wokwi/elements";
+// Registers the vendored, modified stepper element (app-stepper-motor) — the
+// package's stepper exposes only 4 cosmetic bipolar pins, so we vendor+modify
+// the source (see docs/DECISIONS.md). Kept out of individual views so Vitest/
+// jsdom never executes the web-component code.
+import "./vendor/wokwi/stepper-motor-element";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

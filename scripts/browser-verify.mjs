@@ -21,7 +21,12 @@
 //      the script still completes.
 //  10. StepperMotor: a script drives GPIO4..7 (in1..in4) 8 half-step cycles
 //      forward then 8 back (single-bit writes), lands on the exact expected
-//      angle/direction, and the rotating shaft marker sweeps with it.
+//      angle/direction, the vendored app-stepper-motor's shadow-DOM arrow
+//      sweeps with data-angle, and all six canvas pin markers sit on the
+//      element's own pinInfo coordinates (in1..in4, vcc, gnd) sub-pixel.
+//  11. No custom-element registration collision: after a reload armed with an
+//      error capture, both the package's wokwi-stepper-motor and the vendored
+//      app-stepper-motor register and no customElements.define error is thrown.
 import { spawn } from "node:child_process";
 import { rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -35,6 +40,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
+// The vendored app-stepper-motor shadow-DOM transform is "rotate(<angle>, x,y)
+// ..."; extract just the leading signed angle.
+const parseRotate = (transform) =>
+  parseFloat(/rotate\((-?[0-9.]+)/.exec(transform ?? "")?.[1] ?? "NaN");
+
+// Stepper pin anchors: mirror of StepperMotorView's stepperPinOffsets, derived
+// from the vendored element's modified geometry (size 8, six 2.54 mm-pitch
+// leads centered on the bottom face). Compared against the element's live
+// pinInfo in step 10.
+const EXPECTED_STEPPER_OFFSETS = {
+  in1: { x: 15.553, y: 96.012 },
+  in2: { x: 25.1542, y: 96.012 },
+  in3: { x: 34.7554, y: 96.012 },
+  in4: { x: 44.3566, y: 96.012 },
+  vcc: { x: 53.9578, y: 96.012 },
+  gnd: { x: 63.559, y: 96.012 },
+};
 
 const profile = join(process.env.TEMP ?? ".", "opencode", `edge-cdp-${Date.now()}`);
 mkdirSync(profile, { recursive: true });
@@ -134,7 +156,11 @@ const state = () =>
         stepperAngle: q('[data-testid="stepper-body"]')?.getAttribute('data-angle') ?? null,
         stepperDirection: q('[data-testid="stepper-body"]')?.getAttribute('data-direction') ?? null,
         stepperStepsPerSecond: q('[data-testid="stepper-body"]')?.getAttribute('data-steps-per-second') ?? null,
-        stepperRotate: (() => { const g = q('[data-testid="stepper-body"] g'); return g?.getAttribute('transform') ?? null; })(),
+        stepperRotate: (() => {
+          const el = q('[data-testid="stepper-body"] app-stepper-motor');
+          const p = el?.shadowRoot?.querySelector('#arrow-path');
+          return p?.getAttribute('transform') ?? null;
+        })(),
         placedBodies: qa('[data-testid^="body-placed-"]').length,
         deleteButton: q('[data-testid="delete-component"]')?.textContent ?? null,
         wire7: (() => {
@@ -822,13 +848,63 @@ const state = () =>
   //         expose each intermediate 2-bit/transient pattern to the engine and
   //         corrupt the step accounting. 2 laps forward (16 half-steps)
   //         must land on exactly 16*(360/4096) = 1.40625 deg CW, 2 laps back
-  //         must return to 0 deg CCW, and the rotating shaft marker must move
-  //         with data-angle.
+  //         must return to 0 deg CCW, and the motor body is the real
+  //         wokwi-stepper-motor element — its shadow-DOM #arrow-path rotation
+  //         must sweep with data-angle.
   await dropKindAt('stepper', 640, 200);
   s = await waitFor("dropped Stepper should render as placed-8", (x) => x.placedStepper !== null);
+  s = await waitFor("motor shadow-DOM art should be attached", (x) => x.stepperRotate !== null);
   assert(s.stepperAngle === "0", "stepper should start at angle 0, got " + s.stepperAngle);
   assert(s.stepperDirection === "none", "stepper should start direction none, got " + s.stepperDirection);
-  assert(s.stepperRotate === "rotate(0 54 55)", "marker should start unrotated, got " + s.stepperRotate);
+  assert(
+    Math.abs(parseRotate(s.stepperRotate)) < 0.01,
+    "motor should start unrotated, got " + s.stepperRotate
+  );
+
+  // Sub-pixel pin alignment: the six canvas markers must sit on the vendored
+  // element's own pinInfo positions (the view's stepperPinOffsets table mirrors
+  // that geometry), and the relabel must be in1..in4, vcc, gnd.
+  const pinGeo = await evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const sr = stage.getBoundingClientRect();
+    const scale = sr.width / 1200;
+    const body = document.querySelector('[data-testid="body-placed-8"]').getBoundingClientRect();
+    const origin = { x: (body.left - sr.left) / scale, y: (body.top - sr.top) / scale };
+    const el = document.querySelector('[data-testid="body-placed-8"] app-stepper-motor');
+    const info = el?.pinInfo ?? [];
+    const byName = Object.fromEntries(info.map((pi) => [pi.name, { x: pi.x, y: pi.y }]));
+    const aligns = info.map((pi) => {
+      const m = document.querySelector('[data-testid="pin-placed-8-'+pi.name+'"] circle').getBoundingClientRect();
+      const got = { x: (m.left + m.width / 2 - sr.left) / scale, y: (m.top + m.height / 2 - sr.top) / scale };
+      const want = { x: origin.x + pi.x, y: origin.y + pi.y };
+      return { name: pi.name, got, want, dx: got.x - want.x, dy: got.y - want.y };
+    });
+    return { elTag: el?.tagName.toLowerCase() ?? null, names: info.map((pi) => pi.name), byName, aligns };
+  })()`);
+  console.log("step10 pin geometry:", JSON.stringify(pinGeo));
+  assert(
+    pinGeo.elTag === "app-stepper-motor",
+    "motor body must be the vendored app-stepper-motor, got " + pinGeo.elTag
+  );
+  assert(
+    JSON.stringify([...pinGeo.names].sort()) ===
+      JSON.stringify(["gnd", "in1", "in2", "in3", "in4", "vcc"].sort()),
+    "vendored element must expose six pins in1..in4, vcc, gnd, got " + JSON.stringify(pinGeo.names)
+  );
+  for (const [name, off] of Object.entries(EXPECTED_STEPPER_OFFSETS)) {
+    const live = pinGeo.byName[name];
+    assert(
+      live && Math.abs(live.x - off.x) < 0.01 && Math.abs(live.y - off.y) < 0.01,
+      "stepperPinOffsets must match the element pinInfo for " + name + ", got " + JSON.stringify(live)
+    );
+  }
+  for (const a of pinGeo.aligns) {
+    assert(
+      Math.abs(a.dx) < 1 && Math.abs(a.dy) < 1,
+      "pin " + a.name + " must align sub-pixel on its lead, got dx=" + a.dx.toFixed(3) + " dy=" + a.dy.toFixed(3)
+    );
+  }
+
   await wire('pin-board-GPIO4', 'pin-placed-8-in1');
   await wire('pin-board-GPIO5', 'pin-placed-8-in2');
   await wire('pin-board-GPIO6', 'pin-placed-8-in3');
@@ -866,10 +942,34 @@ const state = () =>
     (x) => x.stepperDirection === "CCW" && Math.abs(parseFloat(x.stepperAngle)) < 0.01,
     10000
   );
-  const backAngle = parseFloat(/rotate\((-?[0-9.]+)/.exec(s.stepperRotate)?.[1] ?? "NaN");
-  assert(Math.abs(backAngle) < 0.01, "marker should return to ~0 rotation, got " + s.stepperRotate);
+  const backAngle = parseRotate(s.stepperRotate);
+  assert(Math.abs(backAngle) < 0.01, "motor should return to ~0 rotation, got " + s.stepperRotate);
   console.log("step10 reverse CCW:", JSON.stringify(s));
   assert(!s.issue, "unexpected issue banner after stepper step: " + s.issue);
+
+  // ---- 11. No custom-element registration collision. Reload with an error
+  //         capture armed before the app boots; both the package's
+  //         wokwi-stepper-motor and our vendored app-stepper-motor must be
+  //         registered, and no customElements.define error may be reported.
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `window.__execErrors=[]; addEventListener('error',e=>window.__execErrors.push(String(e.message))); addEventListener('unhandledrejection',e=>window.__execErrors.push('reject:'+String(e.reason)));`,
+  });
+  await send("Page.reload", { ignoreCache: true });
+  await sleep(2500);
+  const reg = await evaljs(`(()=>({
+    pkg: !!customElements.get('wokwi-stepper-motor'),
+    vendored: !!customElements.get('app-stepper-motor'),
+    defineErrors: (window.__execErrors||[]).filter((m)=>/define|custom element|app-stepper-motor/i.test(m)),
+  }))()`);
+  console.log("step11 registration:", JSON.stringify(reg));
+  assert(
+    reg.pkg && reg.vendored,
+    "both wokwi-stepper-motor and app-stepper-motor must be registered, got " + JSON.stringify(reg)
+  );
+  assert(
+    reg.defineErrors.length === 0,
+    "no customElements.define console errors allowed, got " + JSON.stringify(reg.defineErrors)
+  );
 
   console.log("ALL BROWSER CHECKS PASSED");
 } catch (err) {

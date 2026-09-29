@@ -135,11 +135,19 @@ you haven't — this doc assumes you understand `Pin`, `Component`, and
    the view wraps it (boolean props via refs — see
    `LedView.tsx`/`ButtonView.tsx`); otherwise it renders its own static
    SVG like `PicoBoardView.tsx` does (the board uses Raspberry Pi's
-   official Fritzing part, adopted as a repo asset). Per
-   `docs/DECISIONS.md`, only vendor source
-   as a last resort if a real, confirmed blocker is found — and in that
-   case document the specific blocker in `docs/DECISIONS.md`, not just
-   "it didn't work." Each view also exports its
+official Fritzing part, adopted as a repo asset). Vendor source only
+    as a last resort if a real, confirmed blocker is found — and in that
+    case document the specific blocker in `docs/DECISIONS.md`, not just
+    "it didn't work." That is the stepper: `StepperMotorView.tsx`
+    renders one vendored+modified element, `app-stepper-motor` (in
+    `src/vendor/wokwi/`), because the published `wokwi-stepper-motor`
+    exposes only 4 bipolar cosmetic pins while the module needs a 6-pin
+    `in1`–`in4`/`vcc`/`gnd` surface (fed `angleDegrees` via its
+    display-only `angle` property, per `docs/DECISIONS.md`). Vendored
+    source compiled in-repo needs lit's decorators replaced by a static
+    `properties` map + constructor defaults + `declare` fields under our
+    `useDefineForClassFields` tsconfig, and must register under our own
+    tag so the package's registration is untouched. Each view also exports its
    pin anchor offsets (`PinOffsetMap`, stage coordinates the canvas
    needs for wire and pin rendering — take the part's offsets from the
    element's `pinInfo`, mirroring its flip/geometry, as

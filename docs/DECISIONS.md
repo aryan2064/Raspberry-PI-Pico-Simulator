@@ -405,7 +405,11 @@ applies only when *compiling raw wokwi source with our tsconfig*, which
 is not what the package does. Forward rule: **use the published package
 by default; vendor source only as a last resort if a real, confirmed
 blocker is found — and in that case document the specific blocker here,
-not just "it didn't work."**
+  not just "it didn't work."** The stepper motor later became exactly
+  such a case: its published element exposes only four bipolar cosmetic
+  pins (no `vcc`/`gnd`, no `in1`–`in4`), so its source is vendored and
+  modified — with the decorator fix described above — under our own tag;
+  see the Stepper decision below.
 
 Scope discipline: adopted only for LED + button, never to become "mix
 every visual language", and the canvas CSS is kept to
@@ -692,20 +696,24 @@ quirk.
 
 ---
 
-**Stepper is hand-drawn: no `@wokwi/elements` or fritzing part models a 28BYJ-48 + ULN2003 module**
+**Stepper view vendors + modifies `@wokwi/elements`' stepper as `app-stepper-motor` — the one justified vendoring exception**
 
 The motor component models the **module** the MCU drives: a 28BYJ-48
 unipolar stepper wired through a ULN2003 darlington board, exposed as
 four raw digital control inputs (`in1`–`in4`) plus inert `vcc`/`gnd`.
-Neither upstream library ships anything close enough to use without
-inventing geometry:
+Neither upstream library ships a genuine 28BYJ-48 + ULN2003 part, but
+we don't need the *whole* module from one source:
 
 - `wokwi-stepper-motor` (in `@wokwi/elements` 1.9.2) is a **generic
-  bipolar NEMA** unit: pins `A+`/`A-`/`B+`/`B-`, a `size` attribute
-  selecting NEMA 8–34, and an `angle` that is a *display-only* property
-  (the scaffolded `.angle` setter / `_r` marker) — it has no
-  step-sequence semantics, no IN1–IN4 vocabulary, and its pins map to
-  nothing on our module.
+  bipolar NEMA** unit (pins `A+`/`A-`/`B+`/`B-`). Verified live in the
+  real renderer (not by label-guessing) it is a **pure props→visual
+  display**: its shadow DOM contains only `defs` + `g`, the *only*
+  nodes rotated by `angle` are `#arrow-path` and `#shaft-path`, it
+  registers **no interactive attributes**, and its four pins are
+  cosmetic `pinInfo` with empty `signals`. So there is no bipolar
+  logic, pin semantics, or step grammar to leak — it can be repurposed
+  as a rotating motor-body display the same way `wokwi-led` is used as
+  a brightness display.
 - `wokwi-biaxial-stepper` is a **dual bipolar** part (8 pins
   `A1+`/`A1-`/`B1+`/`B1-`…`B2-`), further removed.
 - `fritzing/fritzing-parts` (develop branch) has **zero `28BYJ`
@@ -713,15 +721,44 @@ inventing geometry:
   `stepper_motor_unipolar.fzp` — a generic **square NEMA-style
   housing** with 6 connectors `A/B/C/D/COMMON_1/COMMON_2` (no
   `vcc`/`gnd`, no IN1–IN4) — and `ULN2003A.fzp`, a **bare DIP-16 chip**
-  with no board, no header, and no motor. Using either would force us
-  to invent the whole module anyway.
+  with no board, no header, and no motor.
 
-So the visual is ours: a round green 28BYJ-style motor body next to a
-blue ULN2003 driver board with a 6-way control header on its right
-edge (generic module language, no vendor-identical imitation —
-same rule as the relay). Motor housing and board are static; only an
-internal shaft-orientation marker rotates with `angleDegrees`, so a
-running sequence reads as visible spin.
+So the view is a **vendored, modified** element — one visual, not two
+(`StepperMotorView.tsx`, single `app-stepper-motor` at size 8, ~81×96
+px). This is the confirmed-blocker vendoring the "use the published
+package" rule above allows: the module needs a 6-pin wireable surface,
+and no upstream part ships one with the right pins (`wokwi-stepper-motor`
+stops at 4 bipolar leads; `wokwi-biaxial-stepper` is dual-bipolar;
+Fritzing has no 28BYJ and no IN1–IN4/VCC/GND module). The hybrid it
+replaced (real element as rotating body + a separate hand-drawn driver
+strip for the pins) was dropped in favor of a single unified visual.
+`src/vendor/wokwi/` carries `stepper-motor-element.ts` plus its
+`pin.ts`/`utils/units.ts` deps, registered under **our own tag
+`app-stepper-motor`** so the package's `wokwi-stepper-motor`
+registration is untouched (no collision — asserted in browser-verify
+step 11). Because we compile the raw source with
+`useDefineForClassFields: true`, lit's `@property()`/`@customElement`
+decorators are replaced with a static `properties` map + constructor
+defaults + `declare` fields, plus an explicit
+`customElements.define('app-stepper-motor', …)` — the same fix the
+LED/button vendoring evaluation identified; the vendored source imports
+`lit`, so it is now a direct npm dependency (`^3.3.3`).
+
+Source changes vs upstream: the four `A-/A+/B+/B-` cosmetic leads are
+relabeled `in1`…`in4` and **two leads `vcc`/`gnd` are added** — a
+centered 6-lead strip at 2.54 mm pitch on the bottom face, mirroring
+the module's IN1–IN4/VCC/GND header (size-8 footprint 80.892×96.012;
+lead x = 15.553…63.559, y = 96.012). `pinInfo` reports the six
+names/coordinates — it is the canvas marker surface and
+`stepperPinOffsets` — and the `angle`/`arrow`/`value`/`units`/`size`
+behavior is unchanged: the `angle` property still rotates just
+`#arrow-path`/`#shaft-path`. There are **no text captions under the
+leads**: they would collide with canvas markers, so labels surface via
+`pinInfo` + marker tooltips instead. The element remains display-only;
+the engine's unipolar tables stay the single source of truth for
+behavior. Wokwi's MIT license is preserved, and a `TODO` at the top of
+the vendored file requires adding explicit attribution before any
+public release/sharing.
 
 **Stepper sequences are hardcoded telltale tables, not derived — 4096 half-step / 2048 full-step per revolution**
 

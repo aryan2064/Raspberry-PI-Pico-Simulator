@@ -487,20 +487,30 @@ before deciding to skip ahead again.
   stepsPerSecond }` where the rate is `1 / real elapsed time since the
   last recognized step` (decays toward 0 while held). Implements
   neither `HasInternalConnections` nor a driver, so one `tick()`
-  settles a pattern write — no two-tick contact latency. View is
-  hand-drawn SVG (`StepperMotorView.tsx`): green round motor body with
-  a rotating orientation marker + blue driver board with a 6-way
-  control header, because neither `@wokwi/elements` (`wokwi-stepper-
-  motor` / `wokwi-biaxial-stepper` are generic bipolar NEMA units with
-  no IN1–IN4 vocabulary or step semantics) nor fritzing-parts (zero
-  28BYJ anywhere; only a generic square NEMA unipolar + a bare
-  ULN2003A DIP) models the module — see `docs/DECISIONS.md`. Canvas
+  settles a pattern write — no two-tick contact latency. View is a single **vendored + modified** element `app-stepper-motor`
+   (`StepperMotorView.tsx`, size 8, ~81×96 px): the published
+   `wokwi-stepper-motor` is generic bipolar with only 4 cosmetic pins
+   and no `vcc`/`gnd`, so its source is vendored into `src/vendor/wokwi/`
+   (with `pin.ts`/`utils/units.ts`), relabeled `in1`–`in4` + added
+   `vcc`/`gnd` (centered 6-lead strip at 2.54 mm pitch), re-decorated
+   for our `useDefineForClassFields` tsconfig, and registered under our
+   own tag — the package's registration is untouched, no collision (see
+   `docs/DECISIONS.md`). Fed only `angleDegrees` via its display-only
+   `angle` property; the six `pinInfo` coords are the canvas marker
+   surface. Canvas
   offsets/render/drop and worker `addComponent` wired; palette now
   offers LED/Button/Relay/Transistor/Stepper. Verified by 6 new engine
   tests (anchor+advance, table re-lock + 2× angle, reverse/CCW
   subtraction, pure half-step, garbage tolerance, live rate incl.
   decay), a CircuitHost e2e (2 full cycles forward + 2 back through
   GPIO0–3 over real wires), 2 canvas tests, updated App palette test —
-  113 passing + 1 skipped total, typecheck + build clean.
+  113 passing + 1 skipped total, typecheck + build clean, and
+  `browser-verify.mjs` step 10 (wires 4 GPIOs to a dropped stepper;
+  the engine angle drives the element's shadow-DOM `#arrow-path`
+  transform, asserted `rotate(0,10.2,10.2)` at rest → `1.40625°` CW
+  → back to `0°` CCW, matching `data-angle`/`data-direction`; the six
+  `in1…in4`/`vcc`/`gnd` pins align to `bodyOrigin + pinInfo` sub-pixel,
+  and step 11 asserts both `wokwi-stepper-motor` and
+  `app-stepper-motor` register with no define errors).
 
 ---

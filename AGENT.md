@@ -144,6 +144,7 @@ PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
       attributes as strings. They are a normal npm dependency (a
       vendoring attempt was evaluated and reverted as unnecessary since
       the package ships pre-compiled JS; see `docs/DECISIONS.md`); the
+      stepper is the one justified vendoring exception (see below). The
       pin offsets come from the elements' `pinInfo`. The board is a
       static SVG: Raspberry Pi's official `Pico-R3-Fritzing.fzpz`
       breadboard view (`svg.breadboard.rpi_pico-tht_1_breadboard.svg`,
@@ -324,24 +325,33 @@ PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
        real elapsed time since the last recognized step` and decays to 0
        on holds. Implements neither `HasInternalConnections` nor a
        driver — one `tick()` after a pattern write settles it (no
-       two-tick contact latency). Hand-drawn view
-       (`StepperMotorView.tsx`, ~180×110): green round motor body with a
-       rotating orientation marker + blue driver board with a 6-way
-       control header (`data-angle`/`data-direction`/
-       `data-steps-per-second`), because neither `@wokwi/elements`
-       (its `wokwi-stepper-motor`/`wokwi-biaxial-stepper` are generic
-       bipolar NEMA units with no IN1–IN4 or step semantics) nor
-       fritzing-parts (zero 28BYJ anywhere; only a generic square NEMA
-       unipolar part + a bare ULN2003A DIP) models the module. Palette
+two-tick contact latency). View is a vendored+modified element
+         `app-stepper-motor` (in `src/vendor/wokwi/`, size 8, ~81×96
+         px): the published `wokwi-stepper-motor` exposes only 4 bipolar
+         cosmetic pins with no `vcc`/`gnd`, so its source is vendored
+         (with `pin.ts`/`utils/units.ts`), relabeled `in1`–`in4` + added
+         `vcc`/`gnd` (centered 6-lead strip at 2.54 mm pitch),
+         re-decorated for our `useDefineForClassFields` tsconfig, and
+         registered under our own tag — the package's registration is
+         untouched (see `docs/DECISIONS.md`). Fed `angleDegrees` via its
+         display-only `angle` property; probe-verified to rotate just
+         `#arrow-path`/`#shaft-path`. The six `pinInfo` coords are the
+         wireable canvas surface (`data-angle`/`data-direction`/
+         `data-steps-per-second`). Palette
        entry, canvas offsets/render/drop, and worker `addComponent`
        case wired. Verified by `StepperMotor.test.ts` (6: anchor+advance,
        table re-lock + 2× angle, reverse/CCW subtraction, pure
 half-step, garbage tolerance, real-time rate incl. decay), a
         CircuitHost e2e (2 full cycles forward + 2 back through GPIO0–3
         over real wires), canvas render + drop tests, the App palette
-        test, and `browser-verify.mjs` step 10 (drop + wire 4 GPIOs,
-        half-step drive 2 laps forward to exactly 1.40625° CW / 2 back
-        to 0° CCW, live steps/sec + rotating marker asserted).
+test, and `browser-verify.mjs` steps 10–11 (drop + wire 4
+         GPIOs, half-step drive 2 laps forward to exactly 1.40625° CW /
+         2 back to 0° CCW; live steps/sec asserted and the element's
+         shadow-DOM `#arrow-path` transform tracked from
+         `rotate(0,10.2,10.2)` through `rotate(1.40625,10.2,10.2)` and
+         back; the six pins align to `bodyOrigin + pinInfo` sub-pixel,
+         and both `wokwi-stepper-motor`/`app-stepper-motor` register
+         with no define errors).
 - [ ] Validation / error states beyond conflict detection (undeclared
        pins, unmapped Python pin numbers, etc.) — not started.
 - [ ] Component library beyond LED/Button/Relay/Transistor/Stepper — not
