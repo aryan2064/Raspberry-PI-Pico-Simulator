@@ -95,7 +95,8 @@ before deciding to skip ahead again.
 
 - **Canvas rendering** (Roadmap step 2) — first layer built and
   verified. Live in `src/ui/`:
-  - `CircuitCanvas.tsx` — the SVG root (viewBox 1200×700). Renders in
+  - `CircuitCanvas.tsx` — the SVG root (fixed 4000×2800 stage, `viewBox`
+    the same). Renders in
     three explicit layers, painted bodies → wires → pins, so a wire can
     never be hidden behind a component body and pin markers stay
     visible/clickable on top of everything. Renders every engine
@@ -300,8 +301,11 @@ before deciding to skip ahead again.
   package (a vendoring attempt was reverted as unnecessary — see
   `docs/DECISIONS.md`), registered via a side-effect
   `import "@wokwi/elements"` in `main.tsx`; `CircuitCanvas`
-  became a scaled HTML stage (`data-testid="circuit-stage"`, 1200×700,
-  CSS-transform scaled from a ResizeObserver) with component bodies as
+  became a scaled HTML stage (`data-testid="circuit-stage"`, 4000×2800,
+  CSS-transform scaled from a ResizeObserver; since the pan/zoom
+  milestone it is panned by empty-canvas drag and zoomed by
+  cursor-centered wheel, clamp ×0.25–×3, reset on reload) with component
+  bodies as
   real DOM underneath SVG wire/pin overlays (`data-layer="wires"|"pins"`,
   `pointer-events:none` svgs), and all drop/drag math routed through
   `clientToStagePoint()`. The board is a static SVG of Raspberry Pi's
@@ -309,10 +313,13 @@ before deciding to skip ahead again.
   (`Pico-R3-Fritzing.fzpz` → `svg.breadboard.rpi_pico-tht_1_breadboard.svg`,
   from `https://pip.raspberrypi.com/documents/RP-008310-DS`), adopted
   as `src/ui/assets/pico-breadboard.svg` with the root dims rewritten
-  and a baked-in `matrix(0 0.16 0.16 0 0 0)` for landscape/USB-right at
-  0.16 stage units per Fritzing unit; `picoPinOffsets` are extracted
-  from the part's own `connector{N}pin` circles (no Wokwi board element
-  exists). See `docs/DECISIONS.md`; verified by 2
+  and its baked-in drawing matrix kept; `PicoBoardView` renders it at
+  `PICO_BOARD_W` 200.377 × `PICO_BOARD_H` 79.401 px (0.827″×2.087″ at
+  3.78 px/mm) and `picoPinOffsets` come from the part's own
+  `connector{N}pin` circles mapped through `conn SCALE` 0.096012 px per
+  Fritzing unit (2.54mm × 3.78 / 100), so the 0.100″ pad pitch is
+  9.6012 px = 2.54 mm (no Wokwi board element exists). See
+  `docs/DECISIONS.md`; verified by 2
   engine tests (demo button circuit / pull conflict), 5 CircuitHost
   tests (setupPin pulls, `setupPin` message, bridge pull forwarding),
   updated canvas/App tests, `npm run typecheck`, `npm test` (72

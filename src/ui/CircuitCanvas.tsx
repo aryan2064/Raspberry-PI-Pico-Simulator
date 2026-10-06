@@ -64,35 +64,34 @@ const WIRE_HIT_WIDTH = 14;
 // pixels, so a plain click (e.g. pressing the button) doesn't nudge anything.
 const DRAG_THRESHOLD = 4;
 
-// The stage is a fixed 1:1 coordinate space; the container scales it to fit
-// its (flex-bounded) width with a CSS transform. The wire/pin SVG overlays
-// carry the SAME scale transform (with coordinates kept in stage units), so
-// pin markers and wire endpoints stay glued to the scaled bodies. All
-// interaction handlers convert client coords to stage coords through the
-// stage's bounding rect, so drags/drops behave correctly at any scale. The
-// jsdom fallback (zero rect) passes client coords straight through.
-const STAGE_W = 1200;
-const STAGE_H = 700;
+// The stage is a large fixed 1:1 coordinate space (no fit-to-width scaling).
+// A single CSS transform — translate(pan) scale(zoom), origin top-left — maps
+// it into the fixed-height container viewport. 100% (zoom 1) is the shared
+// Wokwi-calibrated component scale (3.78 px/mm per docs/DECISIONS.md);
+// zooming 0.25..3 keeps small parts reachable. All interaction converts client
+// coords to stage coords through the same view state ((client - pan) / zoom),
+// so drops, drags and wire clicks are correct at any pan/zoom. Pan/zoom are
+// session-only: reload resets to 100% at origin.
+const STAGE_W = 4000;
+const STAGE_H = 2800;
+
+// The container is a fixed-size pannable/zoomable viewport over that stage.
+const VIEWPORT_H = 600;
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 3;
+const ZOOM_STEP = 1.1;
+
+interface ViewState {
+  pan: Vec;
+  zoom: number;
+}
+
+const BASE_VIEW: ViewState = { pan: { x: 0, y: 0 }, zoom: 1 };
 
 // The PicoBoard view is Raspberry Pi's official Fritzing breadboard SVG for
 // the original Pico (static asset, dims re-derived from the part's own
 // connector markup); it is hosted in its own svg wrapper sized to its
-// intrinsic dims (333.86x132.29, ~2.5:1) from PicoBoardView's exports.
-
-function clientToStagePoint(
-  stage: HTMLElement | null,
-  clientX: number,
-  clientY: number
-): Vec {
-  const rect = stage?.getBoundingClientRect();
-  if (rect && rect.width > 0 && rect.height > 0) {
-    return {
-      x: (clientX - rect.left) * (STAGE_W / rect.width),
-      y: (clientY - rect.top) * (STAGE_H / rect.height),
-    };
-  }
-  return { x: clientX, y: clientY };
-}
+// intrinsic dims (200.38x79.40, ~2.5:1) from PicoBoardView's exports.
 
 // Stage position of a pin = its owning component's canvas position + the
 // pin's offset for that component type. This canvas renders from snapshots
@@ -239,9 +238,10 @@ export function CircuitCanvas({
   const [draggingOver, setDraggingOver] = useState(false);
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
 
-  // How much the fixed 1200x700 stage is scaled to fit its container width
-  // (1 in jsdom, where there is no layout/ResizeObserver at all).
-  const [scale, setScale] = useState(1);
+  // View state: the stage's pan offset (px) and zoom factor into the fixed
+  // container viewport. 100% = the calibrated real-size scale; both reset on
+  // reload because pan/zoom is intentionally session-only (docs/DECISIONS.md).
+  const [view, setView] = useState<ViewState>(BASE_VIEW);
 
   // The selected id, mirrored into a ref so the window keydown listener (which
   // is attached once) always sees the latest selection.
@@ -254,6 +254,14 @@ export function CircuitCanvas({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
 
+  // In-progress empty-canvas pan. Pointer-down on the bare canvas (container
+  // or stage, never a body/pin/wire) records the client origin and the pan at
+  // that moment; moves apply the delta, up/cancel discards.
+  const panRef = useRef<{
+    startClient: Vec;
+    startPan: Vec;
+  } | null>(null);
+
   // In-progress body drag. Pointer-down records a candidate; nothing moves
   // until the pointer travels past DRAG_THRESHOLD, so button presses and pin
   // clicks keep working untouched.
@@ -263,19 +271,6 @@ export function CircuitCanvas({
     startPosition: Vec;
     moved: boolean;
   } | null>(null);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || typeof ResizeObserver === "undefined") return undefined;
-    const update = () => {
-      const w = container.clientWidth;
-      if (w > 0) setScale(w / STAGE_W);
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(container);
-    return () => ro.disconnect();
-  }, []);
 
   const infoByComponent = useMemo(
     () => new Map(snapshot.components.map((c) => [c.id, c.renderInfo])),
@@ -338,6 +333,67 @@ export function CircuitCanvas({
     setHoveredWireId(null);
   }
 
+  // Client -> stage coordinates through the view state alone: invert the same
+  // translate-shift-scale transform that maps the stage into the container
+  // ((client - pan) / zoom). Only the container's own layout offset is read
+  // from its rect; the pan/zoom part is pure state, so jsdom — whose rects
+  // are all zero — exercises the exact browser math (and pass through
+  // verbatim at the 100%/origin default).
+  function clientToStagePoint(clientX: number, clientY: number): Vec {
+    const rect = containerRef.current?.getBoundingClientRect();
+    return {
+      x: (clientX - (rect ? rect.left : 0) - view.pan.x) / view.zoom,
+      y: (clientY - (rect ? rect.top : 0) - view.pan.y) / view.zoom,
+    };
+  }
+
+  // ---- empty-canvas pan (pointer events) ----
+
+  function handleContainerPointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return; // primary button only
+    // Pan starts ONLY on the bare canvas. Component bodies, pin markers and
+    // wires handle their own pointerdown (drag/select/wire) and are never the
+    // stage/container, so none of them can start a pan from here.
+    if (e.target !== containerRef.current && e.target !== stageRef.current) return;
+    panRef.current = {
+      startClient: { x: e.clientX, y: e.clientY },
+      startPan: { ...view.pan },
+    };
+    if (typeof e.currentTarget.setPointerCapture === "function") {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore — e.g. jsdom / synthetic events / already-released pointer
+      }
+    }
+  }
+
+  // Wheel ALWAYS zooms (never pans/scrolls), cursor-centered — the stage point
+  // under the cursor stays put — and clamps to [ZOOM_MIN, ZOOM_MAX]. Attached
+  // natively and non-passively because React's onWheel is passive and cannot
+  // reliably preventDefault the page scroll; functional setView lets rapid
+  // wheel ticks accumulate correctly.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      const rect = container.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      setView((v) => {
+        const sx = (cx - v.pan.x) / v.zoom;
+        const sy = (cy - v.pan.y) / v.zoom;
+        const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+        const zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v.zoom * factor));
+        return { pan: { x: cx - sx * zoom, y: cy - sy * zoom }, zoom };
+      });
+    };
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => container.removeEventListener("wheel", onWheel);
+  }, []);
+
   // ---- body drag-to-move (pointer events; pin circles are in another layer
   //      and never trigger this) ----
 
@@ -345,50 +401,69 @@ export function CircuitCanvas({
     if (e.button !== 0) return; // primary button only
     dragRef.current = {
       componentId,
-      startStage: clientToStagePoint(stageRef.current, e.clientX, e.clientY),
+      startStage: clientToStagePoint(e.clientX, e.clientY),
       startPosition: positions[componentId] ?? { x: 0, y: 0 },
       moved: false,
     };
   }
 
   function handleContainerPointerMove(e: React.PointerEvent) {
+    // A body drag takes priority over panning. The pointerdown targets are
+    // mutually exclusive (bare canvas -> pan, component body -> drag), so only
+    // one is ever live; the explicit priority keeps that ordering clear.
     const drag = dragRef.current;
-    if (!drag) return;
-    const current = clientToStagePoint(stageRef.current, e.clientX, e.clientY);
-    const dx = current.x - drag.startStage.x;
-    const dy = current.y - drag.startStage.y;
-    if (!drag.moved) {
-      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
-      drag.moved = true;
-      // Committing to a drag cancels any button press that started on this
-      // pointer-down, so a button never ends up visually stuck pressed while
-      // being dragged around.
-      if (infoByComponent.get(drag.componentId)?.type === "button") {
-        onRelease(drag.componentId);
-      }
-      // Capture the pointer so moves outside the canvas still track.
-      if (typeof e.currentTarget.setPointerCapture === "function") {
-        try {
-          e.currentTarget.setPointerCapture(e.pointerId);
-        } catch {
-          // ignore — e.g. jsdom / synthetic events / already-released pointer
+    if (drag) {
+      const current = clientToStagePoint(e.clientX, e.clientY);
+      const dx = current.x - drag.startStage.x;
+      const dy = current.y - drag.startStage.y;
+      if (!drag.moved) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+        drag.moved = true;
+        // Committing to a drag cancels any button press that started on this
+        // pointer-down, so a button never ends up visually stuck pressed while
+        // being dragged around.
+        if (infoByComponent.get(drag.componentId)?.type === "button") {
+          onRelease(drag.componentId);
+        }
+        // Capture the pointer so moves outside the canvas still track.
+        if (typeof e.currentTarget.setPointerCapture === "function") {
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            // ignore — e.g. jsdom / synthetic events / already-released pointer
+          }
         }
       }
+      onMoveComponent(drag.componentId, {
+        x: drag.startPosition.x + dx,
+        y: drag.startPosition.y + dy,
+      });
+      return;
     }
-    onMoveComponent(drag.componentId, {
-      x: drag.startPosition.x + dx,
-      y: drag.startPosition.y + dy,
-    });
+    // No body drag in progress -> treat the move as a pan (if one started on
+    // the bare canvas). Deltas are client-space because pan IS client-space.
+    const pan = panRef.current;
+    if (pan) {
+      const dx = e.clientX - pan.startClient.x;
+      const dy = e.clientY - pan.startClient.y;
+      if (dx !== 0 || dy !== 0) {
+        setView((v) => ({
+          ...v,
+          pan: { x: pan.startPan.x + dx, y: pan.startPan.y + dy },
+        }));
+      }
+    }
   }
 
   function handleContainerPointerUp(e: React.PointerEvent) {
+    panRef.current = null;
     const drag = dragRef.current;
     if (!drag) return;
     dragRef.current = null;
     if (drag.moved) {
       // Commit exactly where the pointer landed (in case no move event existed
       // for the final lift).
-      const current = clientToStagePoint(stageRef.current, e.clientX, e.clientY);
+      const current = clientToStagePoint(e.clientX, e.clientY);
       onMoveComponent(drag.componentId, {
         x: drag.startPosition.x + (current.x - drag.startStage.x),
         y: drag.startPosition.y + (current.y - drag.startStage.y),
@@ -409,6 +484,7 @@ export function CircuitCanvas({
   }
 
   function handleContainerPointerCancel() {
+    panRef.current = null;
     dragRef.current = null;
   }
 
@@ -434,7 +510,7 @@ export function CircuitCanvas({
       default:
         return; // e.g. non-palette payloads must not be placed
     }
-    onPlaceComponent(clientToStagePoint(stageRef.current, e.clientX, e.clientY), kind);
+    onPlaceComponent(clientToStagePoint(e.clientX, e.clientY), kind);
   }
 
   // The single shared delete trigger used by both the visible Delete button
@@ -490,13 +566,17 @@ export function CircuitCanvas({
     <div
       ref={containerRef}
       data-testid="circuit-canvas"
+      data-zoom={view.zoom}
+      data-pan-x={view.pan.x}
+      data-pan-y={view.pan.y}
       style={{
         position: "relative",
         background: "#f7f7f9",
         border: draggingOver ? "2px dashed #1f8aff" : "1px solid #d0d0d4",
         borderRadius: 4,
         overflow: "hidden",
-        height: STAGE_H * scale,
+        height: VIEWPORT_H,
+        userSelect: "none",
       }}
       onDragOver={(e) => {
         e.preventDefault();
@@ -505,6 +585,7 @@ export function CircuitCanvas({
       onDragEnter={() => setDraggingOver(true)}
       onDragLeave={() => setDraggingOver(false)}
       onDrop={handleDrop}
+      onPointerDown={handleContainerPointerDown}
       onClick={(e) => {
         // A click landing on the bare canvas (container or stage, not on a
         // body/pin/wire) clears the selection. Overlays are pointer-events:none
@@ -532,7 +613,7 @@ export function CircuitCanvas({
           width: STAGE_W,
           height: STAGE_H,
           transformOrigin: "top left",
-          transform: scale !== 1 ? `scale(${scale})` : undefined,
+          transform: `translate(${view.pan.x}px, ${view.pan.y}px) scale(${view.zoom})`,
         }}
       >
         {snapshot.components.map((c) => (
@@ -565,18 +646,18 @@ export function CircuitCanvas({
            stage; only each wire group opts back in. */}
       <svg
         data-layer="wires"
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: STAGE_W,
-          height: STAGE_H,
-          pointerEvents: "none",
-          transformOrigin: "top left",
-          transform: scale !== 1 ? `scale(${scale})` : undefined,
-        }}
-      >
-        {connections.map((conn) => {
+style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: STAGE_W,
+            height: STAGE_H,
+            pointerEvents: "none",
+            transformOrigin: "top left",
+            transform: `translate(${view.pan.x}px, ${view.pan.y}px) scale(${view.zoom})`,
+          }}
+        >
+          {connections.map((conn) => {
           const kindA = infoByComponent.get(conn.from.componentId)?.type;
           const kindB = infoByComponent.get(conn.to.componentId)?.type;
           if (!kindA || !kindB) return null;
@@ -637,18 +718,18 @@ export function CircuitCanvas({
            pointer-events strategy as the wires overlay. */}
       <svg
         data-layer="pins"
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: STAGE_W,
-          height: STAGE_H,
-          pointerEvents: "none",
-          transformOrigin: "top left",
-          transform: scale !== 1 ? `scale(${scale})` : undefined,
-        }}
-      >
-        {snapshot.components.flatMap((c) => {
+style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: STAGE_W,
+            height: STAGE_H,
+            pointerEvents: "none",
+            transformOrigin: "top left",
+            transform: `translate(${view.pan.x}px, ${view.pan.y}px) scale(${view.zoom})`,
+          }}
+        >
+          {snapshot.components.flatMap((c) => {
           const offsets = PIN_OFFSETS[c.renderInfo.type];
           const style = PIN_STYLE[c.renderInfo.type];
           return Object.keys(offsets).map((label) => {

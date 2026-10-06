@@ -7,15 +7,25 @@ import type { PinOffsetMap } from "../types";
 // precedent (hand-drawn art when no real element fits), this radial
 // electrolytic can is plain SVG with a charge-state fill driven by the engine's
 // snapshot. See docs/DECISIONS.md ("Capacitor") for the full reasoning.
-export const CAP_W = 48;
-export const CAP_H = 64;
+// REAL-SIZE SCALING: the drawn can (42 x 52 art units) is pitched at a standard
+// Ø10 x 12.5mm radial electrolytic case (e.g. the Vishay 046 RSL family, whose
+// "Ø10 x 12" nominal case covers e.g. 100µF/40V and 220µF/16V). At the shared
+// Wokwi-calibrated scale of 3.78 px/mm (docs/DECISIONS.md "Shared component
+// scale"), a 10mm can is 37.8 px — the drawing's can is 42 units, so the whole
+// drawing scales by k = 37.8/42 = 0.9. The SVG keeps its own 48x64 viewBox and
+// the exported size reports the real dimensions.
+const CAP_ART_W = 48;
+const CAP_ART_H = 64;
+export const CAP_W = CAP_ART_W * ((10 * 3.78) / 42); // 43.2 px
+export const CAP_H = CAP_ART_H * ((10 * 3.78) / 42); // 57.6 px
 
-// Leg tips (in stage units, matching the two leads drawn below): `a` is the
-// ACTIVE net pin (left leg — the one the resistor/pot and GPIO usually share),
-// `b` the decorative ground-side lead (right leg).
+// Leg tips (matching the two leads drawn below): `a` is the ACTIVE net pin
+// (left leg — the one the resistor/pot and GPIO usually share), `b` the
+// decorative ground-side lead (right leg). Scaled by the same k = 0.9 as the
+// art, so they still land on the drawn leg circles.
 export const capacitorPinOffsets: PinOffsetMap = {
-  a: { x: 14, y: 64 },
-  b: { x: 34, y: 64 },
+  a: { x: 14 * 0.9, y: 64 * 0.9 }, // 12.6, 57.6
+  b: { x: 34 * 0.9, y: 64 * 0.9 }, // 30.6, 57.6
 };
 
 // Hand-drawn radial electrolytic. `chargeFraction` (0..1) fills the can with a
@@ -28,7 +38,7 @@ export function CapacitorArt({ chargeFraction, charged }: { chargeFraction: numb
     <svg
       width={CAP_W}
       height={CAP_H}
-      viewBox={`0 0 ${CAP_W} ${CAP_H}`}
+      viewBox={`0 0 ${CAP_ART_W} ${CAP_ART_H}`}
       style={{ display: "block" }}
     >
       <defs>

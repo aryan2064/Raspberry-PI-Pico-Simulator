@@ -462,6 +462,12 @@ no attribution is required by them, but we record it anyway):
 > tortious action, arising out of or in connection with the use or
 > performance of the design.
 
+**Superseded by the shared-scale calibration (last section):** the board
+now sits at the project-wide 3.78 px/mm scale — `PICO_BOARD_W` 200.377 ×
+`PICO_BOARD_H` 79.401 px with `conn SCALE` 0.096012 px per Fritzing unit,
+so the 0.100" pad pitch (100 units) is 9.6012 px = 2.54 mm and the
+0.16-unit grid text below is historical only.
+
 Ship-it changes are deliberately minimal: only the root `<svg>` dims
 (`width`/`height`/`viewBox`/`overflow`) are rewritten and Raspberry
 Pi's drawing group gets `transform="matrix(0 0.16 0.16 0 0 0)"` baked
@@ -581,9 +587,18 @@ with `wokwi-led.brightness` exactly `0.2500038147554742` at
 
 **`CircuitCanvas` is an HTML stage under SVG overlays; hit-testing is the DOM, not math**
 
+> **Updated by the pan/zoom milestone (last section).** The stage is no
+> longer 1200×700 CSS-scaled from a ResizeObserver; it is a fixed
+> 4000×2800 stage with user pan (empty-canvas drag) and cursor-centered
+> wheel zoom (×0.25–×3, reset on reload). What holds unchanged: bodies
+> are real interactive DOM, wires/pins are `pointer-events:none` SVG
+> overlays in stage units, `clientToStagePoint()` routes all
+> drop/drag math (now `(client − pan)/zoom`), and hit-testing is the
+> DOM, not math.
+
 `CircuitCanvas` no longer draws every graphic in one SVG. The stage is a
-fixed 1200×700 HTML `div` (`data-testid="circuit-stage"`) scaled by CSS
-`transform` from a ResizeObserver measurement, so component bodies stay
+fixed 4000×2800 HTML `div` (`data-testid="circuit-stage"`) under one
+shared pan/zoom `transform`, so component bodies stay
 real interactive DOM (drags, mouse press/release) while wires and pins
 are absolute-positioned SVG overlays (`data-layer="wires"`/`"pins"`,
 `pointer-events:none` at the svg, `auto` on individual wire/pin
@@ -1283,3 +1298,105 @@ provided, adapted to an asset that carries none of its own.
 The Fritzing relay/transistor sections above remain as historical record: the
 transistor is unchanged, and the bare-relay reading (`in`→`COIL1`,
 `gnd`→spare `C2`) still applies to *that* part — it just no longer ships.
+
+---
+
+**All component art is re-calibrated to one shared scale: 3.78 px/mm, anchored on the wokwi resistor**
+
+Until beyond the wokwi-visuals milestone, each view was sized from its own
+precedent (the 140-wide relay body, the 80-wide transistor, the Pico's old
+0.16-unit-per-Fritzing-unit matrix). Those produced *mutually inconsistent*
+millimetre scales, which the shared-SVG pins-layer made visible: every
+part on a shared board has to agree on millimetres, so all non-Wokwi art is
+now derived from the **same constant** `S = 3.78 px/mm`, itself taken from
+the published wokwi resistor the project already calibrated: `RESISTOR_W`
+59.14 px over its 15.645 mm body → `S = 59.14/15.645 = 3.7801 ≈ 3.78 px/mm`.
+
+- **Relay (DFR0473 — 38 × 33 × 20 mm product board):** `RELAY_W = 38·S =
+  143.64` px; the art is scaled by 1.158387 from the vendored board-cropping
+  `viewBox="211 566 124 106.5"` sheet, so `RELAY_H = 123.368` px (native
+  aspect). Aspect `RELAY_W/RELAY_H = 1.1643`. Pin anchors (the
+  area-weighted centroids table above) are unchanged — they were already
+  asset-relative and just ride the new scale.
+- **Transistor (Fritzing TO-92)**: 5.83 mm body width → `TRANSISTOR_W =
+  22.037` px, `TRANSISTOR_H = 32.11` px (art scale 1.333418 over its own
+  `viewBox="0 0 16.527 24.081"`). Aspect 0.6863 — a TO-92 with leads is
+  taller than wide. Offsets collector (1.44, 30.11) / base (11.015, 30.11) /
+  emitter (20.597, 30.11).
+- **Capacitor (hand-drawn radial electrolytic)**: internal 48×64 art drawn at
+  k = 0.9 → `CAP_W = 43.2` px, `CAP_H = 57.6` px (can + legs), fixed viewBox
+  `0 0 48 64`; offsets a (12.6, 57.6) / b (30.6, 57.6).
+- **Pico board**: `conn SCALE = 2.54 mm · S / 100 Fritzing units = 0.096012`
+  px per unit, so the part's real 0.100" pad pitch (100 units) is exactly
+  **9.6012 px = 2.54 mm**; the art renders `PICO_BOARD_W` 200.377 ×
+  `PICO_BOARD_H` 79.401 px. Current anchors (asset-relative), the corrected
+  real-pinout set from the earlier section: `GPIO0` (12.728, 6.091), `GPIO15`
+  (195.156, 6.049) top; `GPIO16` (12.734, 73.257), `GND` (31.936, 73.257),
+  `GPIO17` (22.335, 73.257), `GPIO28` (137.549, 73.257), `3V3_OUT`
+  (156.752, 73.257) bottom.
+- **Ultrasonic (published `wokwi-hc-sr04`)**: no change needed — its natural
+  170.1×94.5 px surface *is* 45×25 mm at 3.78 px/mm, i.e. already on the
+  shared scale (`pinInfo` at (71.3, 81.3, 91.3, 101.3, 94.5) on its native
+  body).
+
+Every re-derived offset was verified by node probes and re-asserted
+sub-pixel in browser-verify steps 9 and 14 before the pan/zoom work; each
+view's header comment names its datasheet/part source and formula.
+
+---
+
+**The canvas is a 4000×2800 stage: empty-canvas drag pans, wheel zoom is cursor-centered (×0.25–×3), precedence is pin-click → body-click/drag → pan → wheel, reset on reload**
+
+The old CSS scale-from-ResizeObserver gave a responsive window but no
+room to inspect closely-packed parts or inter-wire a growing circuit. The
+stage is now a fixed **4000×2800** logical surface (all component art stays
+in stage units at ×1 zoom = the 3.78 px/mm calibration), displayed in a
+100%-height viewport and navigated by two gestures:
+
+- **Pan** — press+empty-drag. Pan is armed only when the pointer-down target
+  is the container/stage itself (never on a body or pin), tracked in a
+  `panRef` (`start`/`last` client points), and committed to view state on
+  pointermove; pointerup/cancel resets the ref. Body press+drag still wins,
+  so a component move is never stolen by pan.
+- **Zoom** — wheel, **cursor-centered**: the stage point under the cursor is
+  frozen, so after each tick `pan' = cursor − stagePoint·zoom'`. Delta sign
+  picks factor 1/1.1 or 1.1; the result is clamped to `[0.25, 3]`. Implemented
+  as a native non-passive wheel listener (React's `onWheel` is passive, which
+  would prevent `preventDefault` on the container) and handled with the
+  function-updater setView pattern. On reload the view resets to `zoom 1,
+  pan (0,0)` — navigational state is ephemeral, not persisted.
+
+The bodies layer, the wires `<svg>`, and the pins `<svg>` all carry the same
+`translate(pan.x, pan.y) scale(zoom)` (`transform-origin: top left`), so
+body `left/top` and SVG user coordinates stay in stage units at every zoom;
+`clientToStagePoint()` = `(clientXY − rect.left/top − pan)/zoom`. Sub-pixel
+anchor/wire/drop verification now runs at non-100% zoom in browser-verify
+steps 15 (zoom ×3, pan after drag, zoom-out to ×0.25) — worst |dx| 0.005 at
+×3 and ×0.25, drop/conflict/drag/wire exact.
+
+**Browser reality that shaped the tests:** Chrome truncates synthetic
+`WheelEvent`/`MouseEvent` `clientX/clientY` to integers, so step 15a's
+"intended" cursor (to a half-pixel) is *not* what the app receives — the
+app's math is exact against the delivered cursor (pan = 300·(1−3) = −600 to
+1e-13 on delivered x=300). browser-verify therefore captures the delivered
+cursor with a capture-phase wheel listener and asserts the cursor-centered
+invariant **against it** (tolerance ≤1 px for delivered-vs-intended);
+physical wheel input is already integer, so real usage sees no difference.
+jsdom's zero-rect makes the same invariant exact in vitest.
+
+**Test surface.** The new jsdom block `CircuitCanvas (pan/zoom viewport)`
+(9 tests) joins the existing `CircuitCanvas (snapshot renderer + input
+relay)` suite (34 tests, still green at default ×1/no-pan):
+- initial attrs (zoom 1, pan 0,0, stage 4000×2800); zoom-in clamp at ×3
+  with exact cursor-centered pan (−600, −400) and single-tick (−30, −20);
+  zoom-out clamp at ×0.25 (pan 225, 150); stage-point preservation when
+  zooming out after a pan; empty-canvas drag pans while `onMoveComponent`
+  is not called; body-drag precedence over pan (component moves exactly,
+  pan stays 0); drop translation through pan+zoom (8 wheel-ins → zoom
+  1.1⁸ = 2.14358881, `stage = (client − pan)/zoom`); drag in stage units
+  at zoom; wire endpoints unchanged in stage space under pan+zoom.
+
+Full gates: `npm run typecheck` (clean), `npm run test` (169 pass, 1
+skipped — 43 in CircuitCanvas), `npm run build`, and `node
+scripts/browser-verify.mjs` ALL CHECKS PASS against the dev server — now
+including the pan/zoom step 15.

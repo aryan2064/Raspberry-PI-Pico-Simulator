@@ -138,7 +138,8 @@ src/
     ComponentPalette.tsx  drag sources: LED + Button + Relay + Transistor
                           (+ scaled previews)
     CircuitCanvas.tsx     snapshot renderer + input relay; scaled HTML
-                          stage (1200×700) under SVG wire/pin overlays
+                          stage (4000×2800, pan via drag, cursor-centered
+                          wheel zoom ×0.25–×3) under SVG wire/pin overlays
     ScriptPanel.tsx       MicroPython editor + Run/Stop + output
     components/           LedView, PicoBoardView, ButtonView, RelayView,
                           TransistorView (+ wokwi custom elements from the

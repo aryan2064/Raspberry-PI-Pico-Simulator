@@ -12,11 +12,14 @@ import transistorArtUrl from "../assets/transistor-to92-npn.svg";
 // core/, so the SOT-23 surface-mount fallback was NOT needed. It is also the
 // better visual match because its left-to-right lead order already equals our
 // BC547-style reading, so the pin labels are unchanged.
-export const TRANSISTOR_W = 80;
-// The part's own viewBox is "0 0 16.527 24.081" (0.22954in x 0.33446in), so
-// scaling to the previous 80-wide body yields a taller, correctly-proportioned
-// 116.566-high part: a TO-92 with its leads is taller than it is wide. The
-// aspect ratio is preserved exactly, so the artwork is never distorted.
+export const TRANSISTOR_W = 5.83 * 3.78; // 22.037 px = the part's 5.83mm width
+// REAL-SIZE SCALING: the part's own viewBox is "0 0 16.527 24.081"
+// (0.22954in x 0.33446in), an Inkscape-72dpi drawing — 16.527 px @ 72dpi =
+// 0.22954in = 5.83mm, which the shared Wokwi-calibrated scale (3.78 px/mm,
+// docs/DECISIONS.md "Shared component scale") renders as 22.037 px wide. A
+// TO-92 with its leads is taller than it is wide, so the derived height keeps
+// the width-dominant body honest: aspect ratio is preserved exactly, never
+// independently chosen (the old 80-wide pick inflated the part ~3.6x).
 const TRANSISTOR_VIEWBOX = { x: 0, y: 0, w: 16.527, h: 24.081 };
 const TRANSISTOR_SCALE = TRANSISTOR_W / TRANSISTOR_VIEWBOX.w;
 export const TRANSISTOR_H = +(TRANSISTOR_VIEWBOX.h * TRANSISTOR_SCALE).toFixed(3);
@@ -46,7 +49,7 @@ function buildTransistorPinOffsets(): PinOffsetMap {
   return offsets;
 }
 
-// collector x = 5.228, base x = 39.988, emitter x = 74.772; all at y = 109.305.
+// collector x = 1.44, base x = 11.015, emitter x = 20.597; all at y = 30.11.
 export const transistorPinOffsets: PinOffsetMap = buildTransistorPinOffsets();
 
 interface TransistorArtProps {

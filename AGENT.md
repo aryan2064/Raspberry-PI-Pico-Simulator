@@ -125,19 +125,24 @@ with `npm run verify:python`).
       ButtonView}.tsx`). Since the execution milestone it is a
       **snapshot renderer + relay** that owns no engine objects and
       never talks to the worker (the parent `App` relays). Since the
-      wokwi milestone it renders a fixed 1200×700 HTML stage
-      (`data-testid="circuit-stage"`) scaled by a CSS transform from a
-      ResizeObserver, with component bodies as absolute-positioned divs
-      (`data-testid="body-<id>"`) — real interactive DOM — under two SVG
-      overlays (`data-layer="wires"|"pins"`, `pointer-events:none`
-      svgs, `auto` on individual wire/pin groups). The overlays carry
-      the **same `transform: scale()`** as the stage (both pin/wire SVG
-      coords stay in stage units), and each marker sits at its body
+      wokwi milestone it renders a fixed 4000×2800 HTML stage
+      (`data-testid="circuit-stage"`) with component bodies as
+      absolute-positioned divs (`data-testid="body-<id>"`) — real
+      interactive DOM — under two SVG overlays
+      (`data-layer="wires"|"pins"`, `pointer-events:none` svgs, `auto`
+      on individual wire/pin groups). The overlays carry the
+      **same `transform`** (`translate(panX,panY) scale(zoom)`,
+      `transform-origin: top left`) as the stage — both pin/wire SVG
+      coords stay in stage units — and each marker sits at its body
       origin + the component offset (LED anode `(25,42)`/
       cathode `(15,42)`; button `1.l(0,13)`/`1.r(67,13)`/`2.l(0,32)`/
       `2.r(67,32)`; board pads come from Raspberry Pi's **official
       Fritzing part** for the original Pico (see below), re-verified to
-      sub-pixel in browser-verify step 1b). LED
+      sub-pixel in browser-verify step 1b). Since the pan/zoom milestone
+      the stage is pannable (empty-canvas drag, `panRef`) and zoomable
+      (wheel, cursor-centered, clamped ×0.25–×3, reset to ×1/no-pan on
+      reload) with pin-click → body-click/drag → pan → wheel precedence
+      and all drop/drag math routed through `clientToStagePoint()`. LED
       and button visuals are the **published `@wokwi/elements`** (MIT)
       package custom elements, registered once via the side-effect
       `import "@wokwi/elements"` in `main.tsx` and driven through refs

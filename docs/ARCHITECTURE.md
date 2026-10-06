@@ -462,40 +462,38 @@ The `ui` layer renders engine snapshot data, never the engine itself.
 Two structural choices from the wokwi-visuals + pin-layout milestones:
 
 1. **Component bodies are real DOM, wires/pins are an SVG overlay, all
-   under one CSS scale.** The `CircuitCanvas` stage is a fixed 1200×700
-   HTML `div` (`data-testid="circuit-stage"`) scaled by a CSS
-   `transform` measured from a `ResizeObserver` (`300px` wide container
-   → 0.25 scale, so interactive targets stay sanely sized at any window
-   width). Component bodies sit inside it as absolutely-positioned divs
-   (`data-testid="body-<id>"`, `style.left/top` in stage units) — real,
-   hoverable, draggable DOM. Two `<svg>` overlays (`data-layer="wires"`,
-   `data-layer="pins"`, each `pointer-events: none` with `auto` enabled
-   only on individual wire/pin groups) draw the connecting lines and pin
-   markers above the bodies. Both overlays carry the **same `transform:
-   scale()` (with `transform-origin: top-left`) as the stage**, so SVG
-   user coordinates stay in stage units throughout. Each marker sits at
-its body origin + the component pin offset (LED anode
-`(25,42)` / cathode `(15,42)`; button `1.l(0,13)` / `1.r(67,13)` /
-     `2.l(0,32)` / `2.r(67,32)`; board pins sit on the part's own
-    16-stage-unit-pitch grid (0.100" pads at 0.16 stage units per
-    Fritzing unit)
-    across the two long edges, **extracted from the official part's own
-    connector markup** (`GPIO0` `(21.21,10.15)` … `GPIO15` `(325.22,10.08)`
-    top, `GPIO16` `(21.22,122.08)` … `GND` `(53.22,122.08)` /
-    `3V3_OUT` `(85.22,122.08)` / `VBUS` `(325.22,122.08)` bottom), with
-    every one of the 40 header pads now mapped. The pin labels follow
-    the **real Raspberry Pi Pico pinout** (Zephyr `rpi-pico` binding), not
-    the part's connector ids — the two differ on the right column, and the
-    first board build used the ids for labels, placing its right-column
-    markers a few pads off the true positions (see `docs/DECISIONS.md`). A previous version
+   under one shared pan/zoom transform.** The `CircuitCanvas` stage is a
+   fixed 4000×2800 HTML `div` (`data-testid="circuit-stage"`) inside a
+   `100%`-height viewport window; component bodies sit inside it as
+   absolutely-positioned divs (`data-testid="body-<id>"`,
+   `style.left/top` in stage units) — real, hoverable, draggable DOM.
+   Two `<svg>` overlays (`data-layer="wires"`, `data-layer="pins"`,
+   each `pointer-events: none` with `auto` enabled only on individual
+   wire/pin groups) draw the connecting lines and pin markers above the
+   bodies. All three layers carry the **same `transform`** —
+   `translate(pan.x,pan.y) scale(zoom)` with `transform-origin:
+   top-left` — so SVG user coordinates and body `left/top` stay in
+   stage units throughout. Interaction precedence is pin-click →
+   body-click/drag → pan → wheel: empty-canvas drag pans (via a
+   `panRef`), a native non-passive wheel listener zooms cursor-centered
+   (clamp ×0.25–×3, ×1 at rest = the 3.78 px/mm calibration, reset to
+   no-pan/×1 on reload), and body/pin handling suppresses pan. Each
+   marker sits at its body origin + the component pin offset (LED anode
+   `(25,42)` / cathode `(15,42)`; button `1.l(0,13)` / `1.r(67,13)` /
+   `2.l(0,32)` / `2.r(67,32)`; the Pico's 40 header pads derived by
+   `PicoBoardView` from the official part's own `connectorNpin` markup).
+   The pin labels follow the **real Raspberry Pi Pico pinout** (Zephyr
+   `rpi-pico` binding), not the part's connector ids — the two differ
+   on the right column, and the first board build used the ids for
+   labels (see `docs/DECISIONS.md`). A previous version
    left the overlays unscaled, so every marker and wire endpoint
    rendered ~`1/scale − 1` away from its body at any zoom — the fix
    snaps them to sub-pixel agreement (asymptotically asserting in
    browser-verify step 1b against the real browser, which also proves
    the overlays track the bodies while dragging). All client→stage
    coordinate math goes through `clientToStagePoint()`
-   (`getBoundingClientRect`-based), so drop and drag deltas stay correct
-   under any scale.
+   (`getBoundingClientRect`-based, then `(client − pan)/zoom`), so
+   drop and drag deltas stay correct under any pan/zoom.
 2. **LED and button visuals come from the published `@wokwi/elements`.**
    `wokwi-led` and `wokwi-pushbutton` (MIT) are a normal npm dependency
    and register themselves via the side-effect `import "@wokwi/elements"`
@@ -517,11 +515,11 @@ its body origin + the component pin offset (LED anode
     `svg.breadboard.rpi_pico-tht_1_breadboard.svg`, from
     `https://pip.raspberrypi.com/documents/RP-008310-DS`), adopted as
     `src/ui/assets/pico-breadboard.svg` with only the root `svg` dims
-    rewritten and the drawing group given the baked-in
-    `matrix(0 0.16 0.16 0 0 0)` (landscape, USB right, 0.16 stage units
-    per Fritzing unit) — rendered by `PicoBoardView` as a bare `<image>`
-    inside a sized wrapper, with pin-offset coordinates drawn from the
-    part's own `connector{N}pin` circles through that same matrix.
+    rewritten — rendered by `PicoBoardView` as a bare `<image>` inside a
+    sized wrapper at `PICO_BOARD_W` 200.377 × `PICO_BOARD_H` 79.401 px
+    (0.827″×2.087″ at 3.78 px/mm), with pin-offset coordinates drawn
+    from the part's own `connector{N}pin` circles through `conn SCALE`
+    0.096012 px per Fritzing unit (0.100″ pads = 9.6012 px = 2.54 mm).
     The engine `PicoBoard` mirrors every one of the 40 header pads:
     26 GPIOs (GP0..GP22, GP26..GP28), 8 GND pads tied as one ground plane
     via `HasInternalConnections` (single `OUT LOW` driver at `GND`), and

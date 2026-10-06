@@ -860,3 +860,201 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     });
   });
 });
+
+describe("CircuitCanvas (pan/zoom viewport)", () => {
+  // The canvas is a fixed 4000x2800 stage inside a pannable/zoomable viewport.
+  // jsdom has no layout, so every rect is zero and clientToStagePoint reduces
+  // to (client - pan)/zoom — the exact browser math, so the cursor-centered
+  // wheel invariant holds to the last pixel and can be asserted with ===.
+  const wheel = (container: Element, deltaY: number) =>
+    fireEvent.wheel(container, { deltaY, clientX: 300, clientY: 200 });
+
+  it("starts at 100%/origin and reports pan/zoom on the container", () => {
+    renderCanvas();
+    const container = screen.getByTestId("circuit-canvas");
+    expect(container.getAttribute("data-zoom")).toBe("1");
+    expect(container.getAttribute("data-pan-x")).toBe("0");
+    expect(container.getAttribute("data-pan-y")).toBe("0");
+
+    // The stage is 4000x2800 regardless of the viewport size.
+    const stage = screen.getByTestId("circuit-stage");
+    expect(stage.style.width).toBe("4000px");
+    expect(stage.style.height).toBe("2800px");
+  });
+
+  it("zooms in with the wheel, centered on the cursor (pan = cursor*(1-zoom))", () => {
+    renderCanvas();
+    const container = screen.getByTestId("circuit-canvas");
+
+    wheel(container, -100);
+    expect(Number(container.getAttribute("data-zoom"))).toBeCloseTo(1.1, 9);
+    expect(Number(container.getAttribute("data-pan-x"))).toBeCloseTo(-30, 9); // 300*(1-1.1)
+    expect(Number(container.getAttribute("data-pan-y"))).toBeCloseTo(-20, 9); // 200*(1-1.1)
+
+    // After 12 ticks 1.1^12 > 3 => clamps at exactly 3, still cursor-centered:
+    // the stage point under (300,200) stays fixed throughout.
+    for (let i = 0; i < 11; i++) wheel(container, -100);
+    expect(Number(container.getAttribute("data-zoom"))).toBeCloseTo(3, 9);
+    expect(Number(container.getAttribute("data-pan-x"))).toBeCloseTo(-600, 9);
+    expect(Number(container.getAttribute("data-pan-y"))).toBeCloseTo(-400, 9);
+  });
+
+  it("clamps zoom-out at 0.25x, also cursor-centered", () => {
+    renderCanvas();
+    const container = screen.getByTestId("circuit-canvas");
+
+    for (let i = 0; i < 20; i++) wheel(container, 100);
+    expect(Number(container.getAttribute("data-zoom"))).toBeCloseTo(0.25, 9);
+    // pan = cursor*(1-zoom) => 300*0.75, 200*0.75.
+    expect(Number(container.getAttribute("data-pan-x"))).toBeCloseTo(225, 9);
+    expect(Number(container.getAttribute("data-pan-y"))).toBeCloseTo(150, 9);
+  });
+
+  it("preserves the stage point under the cursor when zooming out after a pan", () => {
+    renderCanvas();
+    const container = screen.getByTestId("circuit-canvas");
+
+    // Pan first: wheel-zoom to 1.61051x (5 ticks), then pan by (+30,+40).
+    for (let i = 0; i < 5; i++) wheel(container, -100);
+    fireEvent.pointerDown(container, { clientX: 100, clientY: 100, button: 0 });
+    fireEvent.pointerMove(container, { clientX: 130, clientY: 140 });
+    fireEvent.pointerUp(container, { clientX: 130, clientY: 140 });
+    const panX = Number(container.getAttribute("data-pan-x"));
+    const panY = Number(container.getAttribute("data-pan-y"));
+
+    // The stage point under the cursor is (300-panX)/zoom == (200-panY)/zoom.
+    const stageX = (300 - panX) / 1.61051;
+    const stageY = (200 - panY) / 1.61051;
+
+    // One zoom-out tick: 1/1.1 => zoom' = 1.4641. The stage point must stay put.
+    wheel(container, 100);
+    const zoomAfter = Number(container.getAttribute("data-zoom"));
+    const panXAfter = Number(container.getAttribute("data-pan-x"));
+    const panYAfter = Number(container.getAttribute("data-pan-y"));
+    expect(zoomAfter).toBeCloseTo(1.4641, 12);
+    expect((300 - panXAfter) / zoomAfter).toBeCloseTo(stageX, 9);
+    expect((200 - panYAfter) / zoomAfter).toBeCloseTo(stageY, 9);
+  });
+
+  it("pans on an empty-canvas drag and never moves the component bodies", () => {
+    const onMoveComponent = vi.fn();
+    renderCanvas(makeSnapshot(), makeConnections(), { onMoveComponent });
+    const container = screen.getByTestId("circuit-canvas");
+
+    fireEvent.pointerDown(container, { clientX: 100, clientY: 50, button: 0 });
+    fireEvent.pointerMove(container, { clientX: 130, clientY: 90 });
+    fireEvent.pointerUp(container, { clientX: 130, clientY: 90 });
+
+    expect(container.getAttribute("data-pan-x")).toBe("30");
+    expect(container.getAttribute("data-pan-y")).toBe("40");
+    expect(onMoveComponent).not.toHaveBeenCalled();
+  });
+
+  it("a body drag takes priority over panning even when the move passes over the canvas", () => {
+    const onMoveComponent = vi.fn();
+    renderCanvas(makeSnapshot(), makeConnections(), { onMoveComponent });
+    const container = screen.getByTestId("circuit-canvas");
+    const body = screen.getByTestId("body-led");
+
+    fireEvent.pointerDown(body, { clientX: 100, clientY: 100, button: 0 });
+    // Move far (well past the 4px threshold) over the bare canvas.
+    fireEvent.pointerMove(container, { clientX: 250, clientY: 220 });
+    fireEvent.pointerUp(container, { clientX: 250, clientY: 220 });
+
+    // The component was dragged (in stage units) but the viewport did not pan.
+    expect(onMoveComponent).toHaveBeenCalledWith("led", { x: 550, y: 160 });
+    expect(container.getAttribute("data-pan-x")).toBe("0");
+    expect(container.getAttribute("data-pan-y")).toBe("0");
+  });
+
+  it("translates a drop through the current pan/zoom (drop lands on the right stage point)", () => {
+    const onPlaceComponent = vi.fn();
+    renderCanvas(makeSnapshot(), makeConnections(), { onPlaceComponent });
+    const container = screen.getByTestId("circuit-canvas");
+
+    // Zoom in 8 ticks (zoom = 1.1^8), cursor-centered on (300,200).
+    wheel(container, -100);
+    wheel(container, -100);
+    wheel(container, -100);
+    wheel(container, -100);
+    wheel(container, -100);
+    wheel(container, -100);
+    wheel(container, -100);
+    wheel(container, -100);
+    expect(Number(container.getAttribute("data-zoom"))).toBeCloseTo(1.1 ** 8, 9);
+
+    // Drop at client (600,350): stage = (client - pan)/zoom, rect is zero.
+    dropPaletteComponent(container, "led", 600, 350);
+    const zoom = Number(container.getAttribute("data-zoom"));
+    const panX = Number(container.getAttribute("data-pan-x"));
+    const panY = Number(container.getAttribute("data-pan-y"));
+    expect(onPlaceComponent).toHaveBeenCalledTimes(1);
+    expect(onPlaceComponent).toHaveBeenCalledWith(
+      { x: (600 - panX) / zoom, y: (350 - panY) / zoom },
+      "led"
+    );
+  });
+
+  it("repositions a body drag through the current pan/zoom in stage units", () => {
+    const onMoveComponent = vi.fn();
+    renderCanvas(makeSnapshot(), makeConnections(), { onMoveComponent });
+    const container = screen.getByTestId("circuit-canvas");
+    const body = screen.getByTestId("body-led");
+
+    // 8 wheel zoom-ins => zoom = 1.1^8, still cursor-centered on (300,200).
+    for (let i = 0; i < 8; i++) wheel(container, -100);
+    const zoom = Number(container.getAttribute("data-zoom"));
+    const panX = Number(container.getAttribute("data-pan-x"));
+    const panY = Number(container.getAttribute("data-pan-y"));
+
+    fireEvent.pointerDown(body, { clientX: 100, clientY: 100, button: 0 });
+    fireEvent.pointerMove(container, { clientX: 220, clientY: 190 });
+    fireEvent.pointerUp(container, { clientX: 220, clientY: 190 });
+
+    const startStage = { x: (100 - panX) / zoom, y: (100 - panY) / zoom };
+    const endStage = { x: (220 - panX) / zoom, y: (190 - panY) / zoom };
+    expect(onMoveComponent).toHaveBeenCalledWith("led", {
+      x: 400 + (endStage.x - startStage.x),
+      y: 40 + (endStage.y - startStage.y),
+    });
+  });
+
+  it("wire endpoints stay in stage space when the view is panned and zoomed", () => {
+    // wheel-zoom to 2x then pan — the rendered wire line coordinates must not
+    // change because they live on the (transformed) stage layer.
+    const { rerender } = renderCanvas(makeSnapshot(), makeConnections());
+    const container = screen.getByTestId("circuit-canvas");
+    const visibleLine = (): Element => {
+      const g = screen.getByTestId("wire-w2");
+      return g.querySelectorAll("line")[1];
+    };
+    const before = {
+      x2: visibleLine().getAttribute("x2"),
+      y2: visibleLine().getAttribute("y2"),
+    };
+
+    for (let i = 0; i < 8; i++) wheel(container, -100);
+    fireEvent.pointerDown(container, { clientX: 100, clientY: 100, button: 0 });
+    fireEvent.pointerMove(container, { clientX: 500, clientY: 300 });
+    fireEvent.pointerUp(container, { clientX: 500, clientY: 300 });
+
+    rerender(
+      <CircuitCanvas
+        snapshot={makeSnapshot()}
+        connections={makeConnections()}
+        positions={defaultPositions()}
+        onConnect={vi.fn()}
+        onDisconnect={vi.fn()}
+        onPress={vi.fn()}
+        onRelease={vi.fn()}
+        onKnobChange={vi.fn()}
+        onDistanceChange={vi.fn()}
+        onMoveComponent={vi.fn()}
+        onPlaceComponent={vi.fn()}
+        onDeleteComponent={vi.fn()}
+      />
+    );
+    expect(visibleLine().getAttribute("x2")).toBe(before.x2);
+    expect(visibleLine().getAttribute("y2")).toBe(before.y2);
+  });
+});

@@ -99,11 +99,12 @@ const EXPECTED_RES_OFFSETS = {
 
 // Capacitor pin anchors: mirror of CapacitorView's capacitorPinOffsets. The
 // capacitor is hand-drawn (no element pinInfo to diff against), so these come
-// from the art's own geometry: `a` is the left leg at the can's bottom edge,
-// `b` the right (ground) leg, both on the y=64 lead line.
+// from the art's own geometry at the shared Wokwi scale: the whole 48x64
+// drawing scales by k = 37.8/42 = 0.9 so the Ø10mm can lands at 10mm, moving
+// `a` (left leg) to (12.6, 57.6) and `b` (right/ground leg) to (30.6, 57.6).
 const EXPECTED_CAP_OFFSETS = {
-  a: { x: 14, y: 64 },
-  b: { x: 34, y: 64 },
+  a: { x: 12.6, y: 57.6 },
+  b: { x: 30.6, y: 57.6 },
 };
 
 // Ultrasonic pin anchors: mirror of UltrasonicSensorView's ultrasonicPinOffsets,
@@ -125,12 +126,13 @@ const EXPECTED_ULTRA_OFFSETS = {
 //   - the 4 screw eyes of the wiring terminal block (left) -> com, no, nc (N/A
 //     is literally silk-screened "N/A" and has no engine pin)
 //   - asset viewBox "211 566 124 106.5" cropped to the board, scaled to the
-//     140-wide body (RELAY_SCALE = 140/124).
+//     real 38mm board at the shared Wokwi scale (RELAY_SCALE = 143.64/124,
+//     the same 3.78 px/mm every component now uses).
 // verifyRelayPinsOnMetal below re-derives every anchor from the SERVED asset's
 // own pixels with the same centroid procedure the measuring probe used, so the
 // offset table is proven against the art itself — exactly the guarantee the old
 // connectorNpin rects used to give.
-const RELAY_SCALE = 140 / 124;
+const RELAY_SCALE = (38 * 3.78) / 124; // 1.158387... — 38mm board -> 143.64px at 3.78 px/mm
 const RELAY_ANCHORS = {
   in: { x: 306.63, y: 626.688 }, // D header pad
   vcc: { x: 306.923, y: 618.791 }, // + header pad
@@ -146,24 +148,25 @@ const EXPECTED_RELAY_OFFSETS = Object.fromEntries(
     { x: +((a.x - RELAY_VB.x) * RELAY_SCALE).toFixed(3), y: +((a.y - RELAY_VB.y) * RELAY_SCALE).toFixed(3) },
   ])
 );
-const RELAY_ASSET = { file: "dfrobot-3v-relay-module.svg", width: 140, height: 106.5 * RELAY_SCALE };
+const RELAY_ASSET = { file: "dfrobot-3v-relay-module.svg", width: 38 * 3.78, height: 106.5 * RELAY_SCALE };
 
 // Transistor pin anchors: mirror of TransistorView's transistorPinOffsets,
 // derived from the shipped Fritzing TO-92 part's own connection markup in
 // src/ui/assets/transistor-to92-npn.svg (viewBox "0 0 16.527 24.081", scaled to
-// the 80-wide body). All three leads share y=109.305; left-to-right is
+// the part's real 5.83mm width at the shared Wokwi scale — TRANSISTOR_SCALE =
+// 22.037/16.527). All three leads share y=30.11; left-to-right is
 // collector / base / emitter, the BC547 reading the engine already used.
 const EXPECTED_TRANSISTOR_OFFSETS = {
-  collector: { x: 5.228, y: 109.305 },
-  base: { x: 39.988, y: 109.305 },
-  emitter: { x: 74.772, y: 109.305 },
+  collector: { x: 1.44, y: 30.11 },
+  base: { x: 11.015, y: 30.11 },
+  emitter: { x: 20.597, y: 30.11 },
 };
 const TRANSISTOR_CONNECTOR_IDS = {
   collector: "connector0pin",
   base: "connector1pin",
   emitter: "connector2pin",
 };
-const TRANSISTOR_ASSET = { file: "transistor-to92-npn.svg", width: 80, height: 116.566 };
+const TRANSISTOR_ASSET = { file: "transistor-to92-npn.svg", width: 5.83 * 3.78, height: 24.081 * (5.83 * 3.78) / 16.527 };
 
 // Sub-pixel pin alignment for the two static-asset components. Relay and
 // Transistor have no custom element and therefore no live `pinInfo`, so instead
@@ -177,7 +180,7 @@ async function verifyAssetPinAlignment(name, placedId, expected, connectorIds, a
   const probe = await evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const sr = stage.getBoundingClientRect();
-    const scale = sr.width / 1200;
+    const scale = sr.width / 4000;
     const body = document.querySelector('[data-testid="body-placed-${placedId}"]');
     const br = body.getBoundingClientRect();
     const img = body.querySelector('image');
@@ -265,7 +268,7 @@ async function verifyRelayPinsOnMetal(placedId, expected, anchors, vb, scale, ev
   const res = await evaljs(`(async()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const sr = stage.getBoundingClientRect();
-    const scalePx = sr.width / 1200;
+    const scalePx = sr.width / 4000;
     const body = document.querySelector('[data-testid="body-placed-${placedId}"]');
     const br = body.getBoundingClientRect();
     const img = body.querySelector('image');
@@ -493,14 +496,18 @@ const state = () =>
   // ---- 1b. Pin markers sit exactly on their artwork. The stage, wires and
   //         pins are all scaled by the same CSS transform (coordinates stay
   //         in stage units), so a marker's rendered center must map back to
-  //         body origin + the element-source pin offset. Before the overlay
-  //         scale was fixed, the markers rendered at unscaled offsets and
-  //         landed ~30% away from every body. Also proves the vendored web
-  //         components upgraded with real shadow-DOM artwork (not bare tags).
+  //         body origin + the element-source pin offset. The stage is
+  //         4000x2800 inside a pannable/zoomable viewport; every probe below
+  //         converts through the stage's LIVE rect (sr.width/4000 IS the
+  //         zoom), so the same math is exact at any pan/zoom. This step
+  //         asserts the default 100%/origin state and all calibrated pin
+  //         placement. Also proves the vendored web components upgraded with
+  //         real shadow-DOM artwork (not bare tags).
   const geo = await evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const container = document.querySelector('[data-testid="circuit-canvas"]');
     const sr = stage.getBoundingClientRect();
-    const scale = sr.width / 1200;
+    const scale = sr.width / 4000;
     const bodyOrigin = (id) => {
       const r = document.querySelector('[data-testid="body-'+id+'"]').getBoundingClientRect();
       return { x: (r.left - sr.left) / scale, y: (r.top - sr.top) / scale };
@@ -520,6 +527,9 @@ const state = () =>
     };
     return {
       scale,
+      zoomAttr: Number(container.getAttribute('data-zoom')),
+      panX: Number(container.getAttribute('data-pan-x')),
+      panY: Number(container.getAttribute('data-pan-y')),
       ledSvg: shadowSvg('body-led', 'wokwi-led'),
       buttonSvg: shadowSvg('body-button', 'wokwi-pushbutton'),
       checks: [
@@ -529,18 +539,28 @@ const state = () =>
         check('button', 'leg1b', 67, 13),
         check('button', 'leg2a', 0, 32),
         check('button', 'leg2b', 67, 32),
-        check('board', 'GPIO0', 21.21, 10.15),
-        check('board', 'GPIO15', 325.22, 10.08),
-        check('board', 'GPIO16', 21.22, 122.08),
-        check('board', 'GPIO28', 229.22, 122.08),
-        check('board', '3V3_OUT', 261.22, 122.08),
-        check('board', 'GND', 53.22, 122.08),
-        check('board', 'GPIO17', 37.22, 122.08),
+        // Board pins map through the calibrated 3.78 px/mm scale (0.096012 px
+        // per Fritzing unit — the same 2.54mm pad pitch the Wokwi parts use).
+        check('board', 'GPIO0', 12.728, 6.091),
+        check('board', 'GPIO15', 195.156, 6.049),
+        check('board', 'GPIO16', 12.734, 73.257),
+        check('board', 'GPIO28', 137.549, 73.257),
+        check('board', '3V3_OUT', 156.752, 73.257),
+        check('board', 'GND', 31.936, 73.257),
+        check('board', 'GPIO17', 22.335, 73.257),
       ],
     };
   })()`);
   console.log("step1b pin geometry:", JSON.stringify(geo));
-  assert(geo.scale < 1, "canvas should be scaled down to fit its container, got scale=" + geo.scale);
+  assert(
+    Math.abs(geo.scale - 1) < 0.001,
+    "the canvas should start at 100% zoom (the calibrated real-size scale, 3.78 px/mm), got scale=" + geo.scale
+  );
+  assert(
+    geo.zoomAttr === 1 && geo.panX === 0 && geo.panY === 0,
+    "data-zoom/data-pan-x/data-pan-y should read 1/0/0 on load, got " +
+      JSON.stringify({ zoom: geo.zoomAttr, panX: geo.panX, panY: geo.panY })
+  );
   assert(
     geo.ledSvg && Math.abs(geo.ledSvg.w - 40) < 2 && Math.abs(geo.ledSvg.h - 50) < 2,
     "wokwi-led must upgrade with its 40x50 shadow svg, got " + JSON.stringify(geo.ledSvg)
@@ -737,7 +757,7 @@ const state = () =>
   await evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const r = stage.getBoundingClientRect();
-    const toClient = (x, y) => ({ x: r.left + x * (r.width / 1200), y: r.top + y * (r.height / 700) });
+    const toClient = (x, y) => ({ x: r.left + x * (r.width / 4000), y: r.top + y * (r.height / 2800) });
     const dt = new DataTransfer();
     dt.setData('application/x-pico-component', 'led');
     const c = toClient(900, 200);
@@ -778,7 +798,7 @@ const state = () =>
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const container = document.querySelector('[data-testid="circuit-canvas"]');
     const r = stage.getBoundingClientRect();
-    const k = r.width / 1200;
+    const k = r.width / 4000;
     const toClient = (x, y) => ({ x: r.left + x * k, y: r.top + y * k });
     const a = toClient(900, 200);
     const b = toClient(1050, 350);
@@ -870,7 +890,7 @@ const state = () =>
   const dropLedAt = (stageX, stageY) => evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const r = stage.getBoundingClientRect();
-    const c = { x: r.left + ${stageX} * (r.width / 1200), y: r.top + ${stageY} * (r.height / 700) };
+    const c = { x: r.left + ${stageX} * (r.width / 4000), y: r.top + ${stageY} * (r.height / 2800) };
     const dt = new DataTransfer();
     dt.setData('application/x-pico-component', 'led');
     document.querySelector('[data-testid="circuit-canvas"]')
@@ -1066,7 +1086,7 @@ const state = () =>
   const dropKindAt = (kind, stageX, stageY) => evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const r = stage.getBoundingClientRect();
-    const c = { x: r.left + ${stageX} * (r.width / 1200), y: r.top + ${stageY} * (r.height / 700) };
+    const c = { x: r.left + ${stageX} * (r.width / 4000), y: r.top + ${stageY} * (r.height / 2800) };
     const dt = new DataTransfer();
     dt.setData('application/x-pico-component', '${kind}');
     document.querySelector('[data-testid="circuit-canvas"]')
@@ -1185,7 +1205,7 @@ const state = () =>
   const pinGeo = await evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const sr = stage.getBoundingClientRect();
-    const scale = sr.width / 1200;
+    const scale = sr.width / 4000;
     const body = document.querySelector('[data-testid="body-placed-8"]').getBoundingClientRect();
     const origin = { x: (body.left - sr.left) / scale, y: (body.top - sr.top) / scale };
     const el = document.querySelector('[data-testid="body-placed-8"] app-stepper-motor');
@@ -1311,7 +1331,7 @@ const state = () =>
   const pirGeo = await evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const sr = stage.getBoundingClientRect();
-    const scale = sr.width / 1200;
+    const scale = sr.width / 4000;
     const body = document.querySelector('[data-testid="body-placed-1"]').getBoundingClientRect();
     const origin = { x: (body.left - sr.left) / scale, y: (body.top - sr.top) / scale };
     const el = document.querySelector('[data-testid="body-placed-1"] app-pir-motion-sensor');
@@ -1424,7 +1444,7 @@ const state = () =>
   await evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const sr = stage.getBoundingClientRect();
-    const scale = sr.width / 1200;
+    const scale = sr.width / 4000;
     const m = document.querySelector('[data-testid="pin-placed-1-out"] circle').getBoundingClientRect();
     const cx = (m.left + m.width / 2 - sr.left) / scale;
     const cy = (m.top + m.height / 2 - sr.top) / scale;
@@ -1462,7 +1482,7 @@ const state = () =>
   const rcGeo = await evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const sr = stage.getBoundingClientRect();
-    const scale = sr.width / 1200;
+    const scale = sr.width / 4000;
     const originOf = (id) => {
       const b = document.querySelector('[data-testid="body-'+id+'"]').getBoundingClientRect();
       return { x: (b.left - sr.left) / scale, y: (b.top - sr.top) / scale };
@@ -1479,7 +1499,7 @@ const state = () =>
     for (const [part, id, offsets] of [
       ['pot', 'placed-2', { terminal1: { x: 29, y: 68.5 }, wiper: { x: 39, y: 68.5 }, terminal2: { x: 49, y: 68.5 } }],
       ['res', 'placed-3', { terminal1: { x: 0, y: 5.65 }, terminal2: { x: 58.8, y: 5.65 } }],
-      ['cap', 'placed-4', { a: { x: 14, y: 64 }, b: { x: 34, y: 64 } }],
+      ['cap', 'placed-4', { a: { x: 12.6, y: 57.6 }, b: { x: 30.6, y: 57.6 } }],
     ]) {
       const o = originOf(id);
       for (const [name, off] of Object.entries(offsets)) {
@@ -1617,7 +1637,7 @@ const state = () =>
   const ultraGeo = await evaljs(`(()=>{
     const stage = document.querySelector('[data-testid="circuit-stage"]');
     const sr = stage.getBoundingClientRect();
-    const scale = sr.width / 1200;
+    const scale = sr.width / 4000;
     const body = document.querySelector('[data-testid="body-placed-5"]').getBoundingClientRect();
     const origin = { x: (body.left - sr.left) / scale, y: (body.top - sr.top) / scale };
     const el = document.querySelector('[data-testid="body-placed-5"] wokwi-hc-sr04');
@@ -1790,6 +1810,243 @@ trig.value(0)`;
   assert(echoSeen === "False", "a null distance must produce NO echo, got " + echoSeen);
   console.log("step14 no-echo confirmed:", echoSeen);
   assert(!s.issue, "unexpected issue banner after the ultrasonic step: " + s.issue);
+
+  // ---- 15. Pan/zoom viewport. The stage is a fixed 4000x2800 space inside a
+  //          pannable/zoomable viewport: wheel ALWAYS zooms (cursor-centered,
+  //          clamped to 0.25..3), empty-canvas drag ALWAYS pans, and because
+  //          every coordinate conversion runs through the same view state, a
+  //          drop/drag/wire/conflict are exact at any pan/zoom. This runs in
+  //          the post-reload session (placed-1..5 = PIR/pot/res/cap/ultra,
+  //          wires w1..w13), so the next ids are placed-6/7 and w14/w15/w16.
+  const viewOf = () =>
+    evaljs(`(()=>{ const c = document.querySelector('[data-testid="circuit-canvas"]');
+      return { zoom: Number(c.getAttribute('data-zoom')), panX: Number(c.getAttribute('data-pan-x')), panY: Number(c.getAttribute('data-pan-y')) };
+    })()`);
+  let v15 = await viewOf();
+  assert(
+    v15.zoom === 1 && v15.panX === 0 && v15.panY === 0,
+    "after the reload session the canvas must still be at 100%/origin, got " + JSON.stringify(v15)
+  );
+
+  // 15a — wheel-zoom to the 3x clamp, cursor-centered. Synthetic WheelEvents
+  // have their clientX/Y truncated to integers by the browser, so the cursor
+  // the app actually receives (delivered, captured here in a capture-phase
+  // listener) is measured and the invariant asserted against THAT: the stage
+  // point under the delivered cursor must stay put, i.e. pan = (delivered -
+  // rect)*(1-zoom). Rounding < 1px of the intended viewport cursor (300,200)
+  // is fine — it is a sub-pixel artifact of dispatchEvent only.
+  const z15 = await evaljs(`(()=>{
+    const c = document.querySelector('[data-testid="circuit-canvas"]');
+    const r = c.getBoundingClientRect();
+    window.__wheelCursor = null;
+    const cap = (e) => { window.__wheelCursor = { x: e.clientX, y: e.clientY }; };
+    c.addEventListener('wheel', cap, true);
+    for (let i = 0; i < 16; i++) {
+      c.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -100, clientX: r.left + 300, clientY: r.top + 200 }));
+    }
+    c.removeEventListener('wheel', cap, true);
+    return { rect: { left: r.left, top: r.top }, delivered: window.__wheelCursor, cx: 300, cy: 200 };
+  })()`);
+  await sleep(150);
+  v15 = await viewOf();
+  assert(Math.abs(v15.zoom - 3) < 1e-9, "16 wheel zoom-ins must clamp at 3x, got " + v15.zoom);
+  const c15 = { x: z15.delivered.x - z15.rect.left, y: z15.delivered.y - z15.rect.top };
+  assert(
+    Math.abs(c15.x - z15.cx) <= 1 && Math.abs(c15.y - z15.cy) <= 1,
+    "the delivered wheel cursor must land within 1px of the intended viewport point, got " + JSON.stringify(c15)
+  );
+  assert(
+    Math.abs(v15.panX - c15.x * (1 - 3)) < 1e-6 && Math.abs(v15.panY - c15.y * (1 - 3)) < 1e-6,
+    "cursor-centered zoom must keep the stage point under the cursor fixed, got " + JSON.stringify({ v15, c15 })
+  );
+  console.log("step15a zoom-in clamp + cursor-centered:", JSON.stringify({ ...v15, deliveredViewportCursor: c15 }));
+
+  // 15b — the whole interaction set at exactly 3x: drop, wire, drag, conflict.
+  await dropLedAt(250, 300);
+  s = await waitFor(
+    "at 3x zoom a dropped LED should land at the requested stage point",
+    (x) => x.placedLed6 !== null && Math.abs(x.placedLed6.x - 250) < 3 && Math.abs(x.placedLed6.y - 300) < 3
+  );
+  await evaljs(`(()=>{ document.querySelector('[data-testid="pin-placed-6-anode"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
+  await sleep(100);
+  await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-GPIO20"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
+  s = await waitFor("at 3x, pin clicks should wire the placed LED as wire-w15", (x) => x.wires.includes("wire-w15"));
+  assert(s.placed6On === "false", "unpowered placed-6 must not light at 3x, got " + s.placed6On);
+  console.log("step15b placed+wired at 3x:", JSON.stringify(s));
+
+  const dragBody = (bodyId, fromStage, toStage) => evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const r = stage.getBoundingClientRect();
+    const k = r.width / 4000;
+    const toClient = (x, y) => ({ x: r.left + x * k, y: r.top + y * k });
+    const a = toClient(${fromStage.x}, ${fromStage.y});
+    const b = toClient(${toStage.x}, ${toStage.y});
+    const body = document.querySelector('[data-testid="body-${bodyId}"]');
+    body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: a.x, clientY: a.y, button: 0, pointerId: 33, pointerType: 'mouse' }));
+    stage.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: b.x, clientY: b.y, pointerId: 33, button: 0 }));
+    stage.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, clientX: b.x, clientY: b.y, pointerId: 33, button: 0 }));
+    return { a, b, k };
+  })()`);
+
+  // Drag the LED 120,-80 stage units (its wire must follow) — exact at 3x.
+  // line[0] is the anode end of the wire (see step-5's wire-w7 shape).
+  const w15Seg = () =>
+    evaljs(`(()=>{
+      const g = document.querySelector('[data-testid="wire-w15"]');
+      const l = g?.querySelector('line');
+      return l ? { x1: +l.getAttribute('x1'), y1: +l.getAttribute('y1'), x2: +l.getAttribute('x2'), y2: +l.getAttribute('y2') } : null;
+    })()`);
+  const w15before = await w15Seg();
+  assert(w15before, "wire-w15 should have renderable endpoints before the 3x drag");
+  await dragBody("placed-6", { x: 265, y: 315 }, { x: 385, y: 235 });
+  s = await waitFor(
+    "at 3x zoom a body drag +120,-80 must land exactly",
+    (x) => x.placedLed6 !== null && Math.abs(x.placedLed6.x - 370) < 3 && Math.abs(x.placedLed6.y - 220) < 3
+  );
+  const w15after = await w15Seg();
+  assert(
+    w15after &&
+      Math.abs(w15after.x1 - (w15before.x1 + 120)) < 3 &&
+      Math.abs(w15after.y1 - (w15before.y1 - 80)) < 3,
+    `wire-w15 anode endpoint should follow the 3x drag, before=${JSON.stringify(
+      w15before
+    )} after=${JSON.stringify(w15after)}`
+  );
+  console.log("step15b dragged at 3x:", JSON.stringify({ placed6: s.placedLed6, wire15: w15after }));
+
+  // Sub-pixel alignment still holds at 3x: the anode marker sits at art
+  // offset (25,42) from its body origin, measured through the zoomed rect.
+  const pinOnArt = (bodyId, pin, expX, expY) => evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const sr = stage.getBoundingClientRect();
+    const k = sr.width / 4000;
+    const body = document.querySelector('[data-testid="body-${bodyId}"]').getBoundingClientRect();
+    const origin = { x: (body.left - sr.left) / k, y: (body.top - sr.top) / k };
+    const p = document.querySelector('[data-testid="pin-${bodyId}-${pin}"] circle').getBoundingClientRect();
+    const got = { x: (p.left + p.width / 2 - sr.left) / k, y: (p.top + p.height / 2 - sr.top) / k };
+    return { got, dx: got.x - (origin.x + ${expX}), dy: got.y - (origin.y + ${expY}), zoom: k };
+  })()`);
+  const a3 = await pinOnArt("placed-6", "anode", 25, 42);
+  assert(
+    Math.abs(a3.dx) < 1 && Math.abs(a3.dy) < 1,
+    "at 3x the LED anode must still align sub-pixel on its art, got dx=" + a3.dx.toFixed(3) + " dy=" + a3.dy.toFixed(3)
+  );
+  console.log("step15b sub-pixel at 3x:", JSON.stringify(a3));
+
+  // Conflict highlighting at 3x: 3V3_OUT <-> GND short flags wire-w15 (the
+  // merged net also pulls in every wire touching either rail) + banner; the
+  // red/dashed styling is applied at any zoom (same SVG layer transform).
+  await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-3V3_OUT"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
+  await sleep(100);
+  await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-GND"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
+  s = await waitFor(
+    "at 3x, a 3V3_OUT-GND short should flag conflicted wires + banner",
+    (x) => x.wires.includes("wire-w16") && x.conflictBanner !== null && x.conflictedWires.length > 0
+  );
+  const peakConflicted = s.conflictedWires;
+  const w16Style = await evaljs(`(()=>{
+    const g = document.querySelector('[data-testid="wire-w16"]');
+    const l = g?.querySelectorAll('line')[1] ?? g?.querySelector('line');
+    return l ? { stroke: l.getAttribute('stroke'), dash: l.getAttribute('stroke-dasharray') } : null;
+  })()`);
+  assert(
+    w16Style && w16Style.stroke === "#d81b1b" && w16Style.dash === "8 5",
+    "conflicted wire must be red/dashed at 3x, got " + JSON.stringify(w16Style)
+  );
+  assert(s.conflictedWires.includes("wire-w16"), "the short itself must be flagged, got " + s.conflictedWires);
+  await evaljs(`(()=>{ document.querySelector('[data-testid="wire-w16"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
+  s = await waitFor(
+    "removing the 3x short must clear the banner and any conflict styling",
+    (x) => !x.wires.includes("wire-w16") && x.conflictBanner === null && x.conflictedWires.length === 0
+  );
+  console.log("step15b conflict at 3x resolved:", JSON.stringify({ conflictedWiresAtPeak: peakConflicted, placed6: s.placedLed6 }));
+
+  // 15c — empty-canvas drag pans (drag-always-pans). Pointer down on the bare
+  // canvas at viewport (300,200) — empty at 3x — then drag client +150,-50.
+  // The component bodies and their wires must NOT move; only the viewport does.
+  const placed6BeforePan = s.placedLed6;
+  const panDrag = await evaljs(`(()=>{
+    const c = document.querySelector('[data-testid="circuit-canvas"]');
+    const r = c.getBoundingClientRect();
+    const a = { x: r.left + 300, y: r.top + 200 };
+    const b = { x: r.left + 450, y: r.top + 150 };
+    c.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: a.x, clientY: a.y, button: 0, pointerId: 44, pointerType: 'mouse' }));
+    c.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: b.x, clientY: b.y, pointerId: 44, button: 0 }));
+    c.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, clientX: b.x, clientY: b.y, pointerId: 44, button: 0 }));
+    return { dx: b.x - a.x, dy: b.y - a.y };
+  })()`);
+  await sleep(150);
+  const panAfterDrag = await viewOf();
+  assert(
+    Math.abs(panAfterDrag.panX - (v15.panX + panDrag.dx)) < 2 &&
+      Math.abs(panAfterDrag.panY - (v15.panY + panDrag.dy)) < 2,
+    "empty-canvas drag should pan exactly by the client delta, got " + JSON.stringify({ before: v15, after: panAfterDrag, drag: panDrag })
+  );
+  assert(
+    JSON.stringify(s.placedLed6) === JSON.stringify(placed6BeforePan),
+    "panning must not move component bodies, got " + JSON.stringify(s.placedLed6)
+  );
+  v15 = panAfterDrag;
+  console.log("step15c pan:", JSON.stringify({ ...v15, drag: panDrag }));
+
+  // 15d — drop at a far stage point AFTER panning proves the drop math
+  // combines pan+zoom: the drop target (1800,1200) is well outside the view.
+  await dropLedAt(1800, 1200);
+  s = await waitFor(
+    "after panning, a drop at stage (1800,1200) should land exactly there",
+    (x) => x.placedLed7 !== null && Math.abs(x.placedLed7.x - 1800) < 3 && Math.abs(x.placedLed7.y - 1200) < 3
+  );
+  await evaljs(`(()=>{ document.querySelector('[data-testid="pin-placed-7-anode"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
+  await sleep(100);
+  await evaljs(`(()=>{ document.querySelector('[data-testid="pin-board-GPIO21"]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()`);
+  s = await waitFor("placed-7 should be wired as wire-w17 (post-pan)", (x) => x.wires.includes("wire-w17"));
+  console.log("step15d drop+wired after pan:", JSON.stringify({ placed7: s.placedLed7, wired: s.wires.includes("wire-w17") }));
+
+  // 15e — zoom out to the 0.25 clamp; drags and sub-pixel alignment still
+  // exact, and the far component stays put. Same delivered-cursor capture as
+  // 15a. Because 15c/15d panned and dropped after the 3x zoom-in, the correct
+  // invariant is now: the STAGE point under the captured cursor must be
+  // preserved across the zoom steps, i.e. (c - pan)/zoom is constant.
+  const v15pre = await viewOf();
+  const zBack = await evaljs(`(()=>{
+    const c = document.querySelector('[data-testid="circuit-canvas"]');
+    const r = c.getBoundingClientRect();
+    window.__wheelCursor = null;
+    const cap = (e) => { window.__wheelCursor = { x: e.clientX, y: e.clientY }; };
+    c.addEventListener('wheel', cap, true);
+    for (let i = 0; i < 34; i++) {
+      c.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 100, clientX: r.left + 300, clientY: r.top + 200 }));
+    }
+    c.removeEventListener('wheel', cap, true);
+    return { rect: { left: r.left, top: r.top }, delivered: window.__wheelCursor };
+  })()`);
+  await sleep(150);
+  v15 = await viewOf();
+  assert(Math.abs(v15.zoom - 0.25) < 1e-9, "34 wheel zoom-outs must clamp at 0.25x, got " + v15.zoom);
+  const cBack = { x: zBack.delivered.x - zBack.rect.left, y: zBack.delivered.y - zBack.rect.top };
+  const stageBefore = { x: (cBack.x - v15pre.panX) / v15pre.zoom, y: (cBack.y - v15pre.panY) / v15pre.zoom };
+  const stageAfter = { x: (cBack.x - v15.panX) / v15.zoom, y: (cBack.y - v15.panY) / v15.zoom };
+  assert(
+    Math.abs(stageAfter.x - stageBefore.x) < 1e-6 && Math.abs(stageAfter.y - stageBefore.y) < 1e-6,
+    "zoom-out must preserve the stage point under the cursor, got " + JSON.stringify({ stageBefore, stageAfter, v15, v15pre })
+  );
+  console.log("step15e zoom-out clamp + cursor-centered (stage point preserved):", JSON.stringify({ ...v15, deliveredViewportCursor: cBack, stageBefore, stageAfter }));
+  await dragBody("placed-6", { x: 380, y: 230 }, { x: 320, y: 320 });
+  s = await waitFor(
+    "at 0.25x a body drag of -60,+90 must land exactly",
+    (x) => x.placedLed6 !== null && Math.abs(x.placedLed6.x - 310) < 3 && Math.abs(x.placedLed6.y - 310) < 3
+  );
+  const a025 = await pinOnArt("placed-7", "anode", 25, 42);
+  assert(
+    Math.abs(a025.dx) < 1 && Math.abs(a025.dy) < 1,
+    "at 0.25x the placed-7 anode must still align sub-pixel on its art, got dx=" + a025.dx.toFixed(3) + " dy=" + a025.dy.toFixed(3)
+  );
+  assert(
+    s.placedLed7 && Math.abs(s.placedLed7.x - 1800) < 3 && Math.abs(s.placedLed7.y - 1200) < 3,
+    "zoom/pan must never move already-placed components, got " + JSON.stringify(s.placedLed7)
+  );
+  console.log("step15e zoom-out clamp + 0.25x interactions:", JSON.stringify({ ...v15, placed6: s.placedLed6, placed7: s.placedLed7, align025: a025 }));
+  assert(!s.issue, "unexpected issue banner after the pan/zoom step: " + s.issue);
 
   console.log("ALL BROWSER CHECKS PASSED");
 } catch (err) {

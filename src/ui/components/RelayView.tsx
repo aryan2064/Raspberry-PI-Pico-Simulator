@@ -14,11 +14,17 @@ import relayArtUrl from "../assets/dfrobot-3v-relay-module.svg";
 //   com -> COM, no -> NO, nc -> NC (the 4-pin wiring terminal block, left)
 // The block's N/A (not-available) terminal is literally silk-screened as such
 // and has no engine pin; it is drawn but never wired.
-export const RELAY_W = 140;
+//
+// REAL-SIZE SCALING: the physical board is 38 x 33 x 20 mm (DFRobot DFR0473
+// product page). It renders at the shared Wokwi-calibrated scale of 3.78 px/mm
+// (docs/DECISIONS.md, "Shared component scale") — 38 mm -> 143.64 px wide.
+export const RELAY_W = 38 * 3.78; // 143.64 px = the board's 38mm real width
 // The vendored asset's viewBox crops the Inkscape A4 page to the module's
 // drawing: "211 566 124 106.5" (the board spans 124 x 106.5 user units at
-// origin 211,566). Scaling to the 140-wide body preserves the aspect exactly.
-export const RELAY_H = 106.5 * (RELAY_W / 124); // 120.2419...
+// origin 211,566). Height is DERIVED from the width through the asset's own
+// 124:106.5 aspect — never set independently, so the artwork is never
+// squished (the old independent 140x~120 pick widened the drawing ~1.16x).
+export const RELAY_H = 106.5 * (RELAY_W / 124); // 123.37
 
 const RELAY_VIEWBOX = { x: 211, y: 566, w: 124, h: 106.5 };
 const RELAY_SCALE = RELAY_W / RELAY_VIEWBOX.w;
@@ -51,8 +57,8 @@ function buildRelayPinOffsets(): PinOffsetMap {
   return offsets;
 }
 
-// Header pins sit on the right at x ≈ 107.97 and screw terminals on the left at
-// x ≈ 13.25, each spread down the body (offset.y grows with the anchor's y).
+// Header pins sit on the right at x ≈ 110.78 and screw terminals on the left at
+// x ≈ 13.62, each spread down the body (offset.y grows with the anchor's y).
 export const relayPinOffsets: PinOffsetMap = buildRelayPinOffsets();
 
 interface RelayArtProps {

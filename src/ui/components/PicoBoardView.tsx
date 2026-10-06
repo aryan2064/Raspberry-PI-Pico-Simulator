@@ -6,19 +6,26 @@ import picoBreadboardUrl from "../assets/pico-breadboard.svg";
 // RP-008310-DS), shipped here as a static asset. The asset has Raspberry Pi's
 // own drawing baked in as a <g transform="matrix(0 0.16 0.16 0 0 0)"> around
 // its native portrait 0.827" x 2.087" drawing: the matrix swaps the axes
-// (long edge -> horizontal, so the USB end lands on the right) and scales to
-// stage units at 0.16 per Fritzing unit — so the part's 0.100" pad pitch (100
-// Fritzing units) is exactly 16 stage units, the same grid the pin-overlay
-// uses. Source, license and attribution live in docs/DECISIONS.md.
-export const PICO_BOARD_W = 333.86;
-export const PICO_BOARD_H = 132.29;
+// (long edge -> horizontal, so the USB end lands on the right). The old build
+// rendered it at 0.16 per Fritzing unit (0.100" pad pitch = 16 stage units),
+// which made the board render at ~6.3 px/mm — bigger than every Wokwi element.
+//
+// REAL-SIZE SCALING: the board is 2.087" x 0.827" = 53.01 x 21.0mm (official
+// Pico dimensioned drawing, RP-008310-DS, also the Fritzing part's own size).
+// At the shared Wokwi-calibrated scale of 3.78 px/mm (docs/DECISIONS.md
+// "Shared component scale") the long edge renders 200.38 px, and the baked
+// pin matrix maps each 0.100" pad pitch to 2.54mm = 9.6012 stage px — the same
+// pad pitch the Wokwi-native parts use (e.g. stepper, 9.6012 px per 0.1in).
+export const PICO_BOARD_W = 2.087 * 25.4 * 3.78; // 200.377 px (53.01mm true width)
+export const PICO_BOARD_H = 0.827 * 25.4 * 3.78; // 79.401 px (21.0mm true depth)
 
 // Exact connection-point positions, extracted from the part's own markup (not
 // eyeballed): each physical pad is an invisible <circle id="connector{N}pin"
 // cx cy r="16"/> in the breadboard SVG. In the portrait file pins 1..20 run
 // down the left edge (cx = 63.437519 for pins 1-8, 63.000015 for 9-20) and
 // pins 21..40 run up the right edge (cx = 763.00024). Each (cx, cy) below is
-// mapped through the same matrix the artwork uses: (0.16 * cy, 0.16 * cx).
+// mapped through the same matrix the artwork uses: (scale * cy, scale * cx)
+// where scale = 0.100" * 3.78 px/mm / 100 units = 2.54 * 3.78 / 100 = 0.096012.
 //
 // Engine pin                          physical pin    connector    real pinout
 //   GPIO0..GPIO15 (with GND on 3,8,13,18) -> pins 1-20                 GPIO0-15
@@ -33,7 +40,7 @@ export const PICO_BOARD_H = 132.29;
 // connector39 = GPIO16 at the far end). The earlier build placed GPIO16/26/27/
 // 28 and the power pins by connector index instead, which put their markers a
 // few pads away from their true positions; this table is the corrected one.
-const SCALE = 0.16;
+const SCALE = (2.54 * 3.78) / 100; // 0.096012 px per Fritzing unit (0.001")
 const conn = (cx: number, cy: number): Vec => ({
   x: +(cy * SCALE).toFixed(3),
   y: +(cx * SCALE).toFixed(3),
