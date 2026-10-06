@@ -89,11 +89,12 @@ that's the one rule this project cannot bend on. See
       (real-Pyodide end-to-end; run with `npm run verify:python`).
       `src/test/setup.ts` patches jsdom's missing `crypto.randomUUID`
       (the engine's `newId()`), registered via `test.setupFiles`.
-Current totals: **122 passing + 1 skipped** (18 Circuit / 7
-PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
-4 transistor / 6 stepper / 5 PIRSensor / 25 CircuitHost / 27 canvas /
-9 App; Pyodide.integration skipped by default — run it with
-`npm run verify:python`).
+Current totals: **160 passing + 1 skipped** (18 Circuit / 7
+PicoBoard / 7 analog / 6 LedBrightness / 6 button / 5 relay /
+4 transistor / 6 stepper / 5 PIRSensor / 3 Potentiometer /
+3 Resistor / 5 Capacitor / 7 UltrasonicSensor / 35 CircuitHost /
+34 canvas / 9 App; Pyodide.integration skipped by default — run it
+with `npm run verify:python`).
 - [x] Analog value channel on `Pin` (`analogValue: number | null`, 0–1
       duty for OUT pins) + analog propagation step in `Circuit.tick()`,
       independent of the digital channel; covered by
@@ -144,8 +145,8 @@ PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
       attributes as strings. They are a normal npm dependency (a
       vendoring attempt was evaluated and reverted as unnecessary since
       the package ships pre-compiled JS; see `docs/DECISIONS.md`); the
-      stepper and the PIR sensor are the only justified vendoring
-      exceptions so far (both covered in `docs/DECISIONS.md`). The
+      stepper, the PIR sensor, and the potentiometer are the justified
+      vendoring exceptions so far (all covered in `docs/DECISIONS.md`). The
       pin offsets come from the elements' `pinInfo`. The board is a
       static SVG: Raspberry Pi's official `Pico-R3-Fritzing.fzpz`
       breadboard view (`svg.breadboard.rpi_pico-tht_1_breadboard.svg`,
@@ -206,7 +207,7 @@ PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
 - [x] Component palette + drag interaction
       (`src/ui/ComponentPalette.tsx`, `src/App.tsx`,
 `src/App.test.tsx`): the palette offers LED, Button, Relay,
-       Transistor, Stepper, and PIR (no second
+       Transistor, Stepper, PIR, Potentiometer, Resistor, Capacitor, and Ultrasonic (no second
        board — PicoBoard stays a singleton) as HTML5 drag sources; dropping
       on the canvas converts client coords to stage coords via
       `clientToStagePoint()` (`getBoundingClientRect`-based, with a
@@ -295,13 +296,25 @@ PicoBoard / 6 LedBrightness / 4 analog / 6 button / 5 relay /
       FLOATING) — no base-resistor/Vbe/leakage analog model. Both are
       MODE_IN control pins, so the state flip lands in `update()` and
       reaches the contacts on the second tick after the control net
-      changes (see `docs/DECISIONS.md`). Views are **hand-drawn static
-      SVG** (`RelayView.tsx` 140×52 screw-terminal module, `data-
-      energized`; `TransistorView.tsx` TO-92-style, BC547 lead order,
-      `data-conducting`) because `@wokwi/elements` has no usable
-      relay or transistor (the only relay it ships, `wokwi-ks2e-m-dc5`,
-      is a bare 8-pad DPDT contactor with no `in` pin — wrong interface
-      AND wrong visuals — see `docs/DECISIONS.md`). Palette entries,
+      changes (see `docs/DECISIONS.md`). Views render **real parts
+      vendored as static SVG assets** — `RelayView.tsx`
+      (`dfrobot-3v-relay-module.svg`, the actual DFRobot 3V Relay Module
+      DFR0473 with screw terminals + 3-pin header, GPL-3.0 in-house-only,
+      140×~120.24, `data-energized`) and `TransistorView.tsx`
+      (`transistor-to92-npn.svg`, generic TO-92 NPN, 80×116.566,
+      BC547 lead order, `data-conducting`) — because `@wokwi/elements`
+      has no usable relay or transistor (the only relay it ships,
+      `wokwi-ks2e-m-dc5`, is a bare 8-pad DPDT contactor with no `in`
+      pin — wrong interface AND wrong visuals — see `docs/DECISIONS.md`).
+      Relay pin offsets come from pixel centroids of the module's own
+      drawn pads/screws (no `connectorNpin` markup in the DFRobot art);
+      transistor offsets come from that part's own `connectorNpin` rects
+      at its own viewBox. browser-verify step 9 re-derives both — the
+      relay's anchors are pixel-proven against the served asset's own
+      metal — and asserts sub-pixel alignment. The relay asset is GPL-3.0
+      with an in-house-only + deferred-attribution TODO in its header;
+      the transistor file is CC BY-SA 3.0 with a deferred-attribution TODO.
+      Palette entries,
       canvas `PIN_OFFSETS`/`PIN_STYLE`/render cases + drop acceptance,
       and worker `addComponent` cases all wired. Verified by
 `Relay.test.ts` (5) + `Transistor.test.ts` (4) — driving control
@@ -376,23 +389,101 @@ and both `wokwi-stepper-motor`/`app-stepper-motor` register
        vendored + extended with a `motionActive` Boolean (dome/lens glow
        warm amber/red while detecting), re-decorated for our
        `useDefineForClassFields` tsconfig, and registered under our own
-       tag; the three leads are relabeled `vcc`/`out`/`gnd` with the
-       upstream coordinates intact (the `pinInfo` coords ARE the
-       `pirPinOffsets` canvas surface). The body is clickable
-       (`data-motion-active` attribute). Palette entry, canvas
-       offsets/render/drop, and worker `addComponent` + `press` dispatch
-       wired. Verified by `PIRSensor.test.ts` (5: idle pin modes + LOW,
-       immediate HIGH through resolveNow, hold expiry via accumulated dt,
-       retriggerable extension past original expiry, non-retriggerable
-ignore), a CircuitHost e2e (press → OUT HIGH on a wired GPIO0 IN
-        → expire back to LOW), canvas render/click + drop tests, the
-        App palette test, and `browser-verify.mjs` step 12 (post-reload
-        drop → sub-pixel pins vs pinInfo → dome click → GPIO8 read HIGH
-        → 5 s hold expires → dome glow reverts; registration check
-        includes `app-pir-motion-sensor`).
+tag; the three leads are relabeled `vcc`/`out`/`gnd` with the
+      upstream coordinates intact (the `pinInfo` coords ARE the
+      `pirPinOffsets` canvas surface). The body is clickable
+      (`data-motion-active` attribute). Palette entry, canvas
+      offsets/render/drop, and worker `addComponent` + `press` dispatch
+      wired. Verified by `PIRSensor.test.ts` (5: idle pin modes + LOW,
+      immediate HIGH through resolveNow, hold expiry via accumulated dt,
+      retriggerable extension past original expiry, non-retriggerable
+      ignore), a CircuitHost e2e (press → OUT HIGH on a wired GPIO0 IN
+      → expire back to LOW), canvas render/click + drop tests, the
+      App palette test, and `browser-verify.mjs` step 12 (post-reload
+      drop → sub-pixel pins vs pinInfo → dome click → GPIO8 read HIGH
+      → 5 s hold expires → dome glow reverts; registration check
+      includes `app-pir-motion-sensor`).
+- [x] `Potentiometer`/`Resistor`/`Capacitor` — the **RC timing trio**
+      (the one-GPIO capacitor-charge measurement recipe; see
+      `docs/DECISIONS.md` for the exact linear model). Potentiometer
+      (`terminal1`/`wiper`/`terminal2`) and Resistor
+      (`terminal1`/`terminal2`) are the first **passive analog
+      producers**: their active pin is MODE_IN (never OUT — a passive
+      part shades a net, it doesn't drive one) and it publishes a 0..1
+      "resistance fraction" directly on the `analogValue` channel
+      (resistor: `resistanceOhms / 20000`, default 10 kΩ → 0.5;
+      potentiometer: `knobPosition`), set in the constructor/setter AND
+      every `update()` so a dropped part or a knob turn is live in the
+      snapshot immediately. That widening of who may produce analog is
+      made safe by `Pin.analogDelivered` (only stamps when the resolver
+      delivers a real non-null value, so a delivered listener can never
+      phantom-conflict with the true producer) — see `docs/ARCHITECTURE.md`,
+      "`Circuit`". Capacitor (`a`/`b`) is the active-timer consumer: `a`
+      is MODE_IN and OWNS its net's PULL (writes it every tick); in the
+      DRIVE phase (`a.digitallyDriven`, a real OUT GPIO holds the net) it
+      force-adopts (HIGH ⇒ charged+pull UP / LOW ⇒ empty+pull DOWN), in
+      the POLL phase it accrues `dt × fraction` against a **linear**
+      `maxChargeSeconds × fraction` threshold (default `maxChargeSeconds`
+      **2 s**) then flips its pull UP — the GPIO watches LOW→HIGH. See
+      `src/engine/components/{Potentiometer,Resistor,Capacitor}.ts` and
+      their tests (`Potentiometer.test.ts` 3, `Resistor.test.ts` 3,
+      `Capacitor.test.ts` 5). Views: the potentiometer is a **third
+      vendoring exception** (`app-potentiometer` in `src/vendor/wokwi/`,
+      interaction-stripped — the published element owns
+      mousedown/drag + a hidden input, which would steal canvas
+      gestures; knob turns are a pointer-capture overlay drag in
+      `PotentiometerView` relaying `setKnobPosition`), the resistor uses
+      the **published `<wokwi-resistor>` directly** (no handlers; drive
+      its `value` string via ref), and the capacitor is **hand-drawn
+      SVG** (`CapacitorView`, radial electrolytic) because
+      `@wokwi/elements` has **no** capacitor element at all. All three
+      per `docs/DECISIONS.md`. Palette entries, canvas
+      offsets/render/drop, `setKnobPosition` worker message +
+      `addComponent` cases (Resistor `DEFAULT_RESISTANCE_OHMS`,
+      Capacitor `{}` options, Potentiometer none) wired. Verified by the
+      engine suites above, a CircuitHost e2e (full RC pulse: 10 kΩ →
+      ~1.0 s charge to HIGH, asserted [0.85, 1.15); knob 0.25 → ~0.5 s),
+      canvas render/drop/knob-drag tests, and `browser-verify.mjs` step
+      13 (real Python discharge/poll a wired RC on GPIO8, assert the LOW→HIGH
+      trip lands ≈ [0.6, 1.4] s; sub-pixel pin assertions for all three
+      new parts).
+- [x] `UltrasonicSensor` (HC-SR04) — the second **stimulus-in /
+       pulse-out** part and the first with a *parametric* stimulus
+       (`src/engine/components/UltrasonicSensor.ts`): pins `vcc`/`gnd`
+       (inert UNSET, wiring realism) + `trig` (MODE_IN) + `echo` (OUT
+       driver, idles LOW). No ranging model — the distance is the
+       simulated stimulus (`setSimulatedDistance(cm | null)`, valid range
+       `[2, 400]` cm at the factory-spec `58 µs/cm` round-trip) and the
+       only real behavior is the TRIG/ECHO pulse: `update()` watches for a
+       **rising edge** on `trig` (previous-value tracking across ticks)
+       and drives `echo` HIGH for `distance × 58 µs` of accumulated `dt`
+       then LOW — a cross-tick timer (`elapsedSeconds`/`echoDurationSeconds`).
+       Mid-pulse retriggers are ignored; `null` or out-of-range ⇒ **no
+       echo at all** (no ~38 ms no-echo timeout — see `docs/DECISIONS.md`).
+       Unlike the PIR, the parametric stimulus does **not** ride `press`:
+       it has its own `top-setSimulatedDistance` message routed by
+       `CircuitHost.setSimulatedDistanceMessage` — the real instantiation
+       of the `HasStimulus<T>` "parametric stimulus" note. View uses the
+       **published `wokwi-hc-sr04` unchanged** (no interaction handlers at
+       all — a third direct-use part after the resistor; the element's
+       `pinInfo` ARE the `ultrasonicPinOffsets` canvas surface): static
+       art + a linear distance slider under the body (2..400 cm; dragging
+       to/past the far end = `null` = "no object"), relayed as
+       `setSimulatedDistance`. Palette entry, canvas
+       offsets/render/drop, and worker `addComponent` +
+       `setSimulatedDistance` cases wired. The bridge gains
+       `micros()`/`tickUs(us)` on top of a new `CircuitHost` sim clock
+       (`simTimeSeconds`/`getSimTimeMicros()`) so real Python can time a
+       TRIG pulse in µs despite the fixed 1/60 s tick. Verified by
+       `UltrasonicSensor.test.ts` (7), CircuitHost e2e (routed ECHO on
+       GPIO10 IN: 300 cm → 17.4 ms HIGH; null → no echo; sim clock
+       reading), canvas render/slider/drop tests (34 total), and
+       `browser-verify.mjs` step 14 (real Python TRIG/ECHO over
+       GPIO9/GPIO10 measuring 300/360 cm to the µs + NO_ECHO at the
+       null-stop).
 - [ ] Validation / error states beyond conflict detection (undeclared
        pins, unmapped Python pin numbers, etc.) — not started.
-- [ ] Component library beyond LED/Button/Relay/Transistor/Stepper/PIR — not
+- [ ] Component library beyond LED/Button/Relay/Transistor/Stepper/PIR/Potentiometer/Resistor/Capacitor/Ultrasonic — not
        started (intentionally; see "Don't pre-build" rule in
        `docs/ROADMAP.md`)
 

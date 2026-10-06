@@ -3,3 +3,26 @@
   color: #213547;
   background-color: #ffffff;
 }
+
+/* Echo-in-flight indicator on the ultrasonic sensor (see
+   UltrasonicSensorView.tsx). Rendered while the engine reports `measuring`
+   (the echo pulse lasts µs..ms of SIM time), so it reads as a quick amber
+   flash inside the two dome/lens circles. */
+.ultrasonic-measuring {
+  position: absolute;
+  inset: 0;
+  border: 3px solid #ffb300;
+  border-radius: 6px;
+  pointer-events: none;
+  animation: ultrasonic-pulse 0.4s ease-out infinite;
+}
+
+@keyframes ultrasonic-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}

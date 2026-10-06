@@ -39,13 +39,29 @@ w# Roadmap
    speculatively. ◑ Beyond `LED`/`Button`: `Relay` + `Transistor`
    added (see "Resolved / closed items") — two more *state-driven
    passive switches* exercising
-   `HasInternalConnections`, built for the stated reason of proving
-   input-driven net switching. Then `StepperMotor` + ULN2003 module —
-   the first *sequence-sensing stateful* component (reads a 4-bit
-   IN1–IN4 pattern in `update()` against hardcoded full/half-step
-   tables, anchors on first contact, re-locks tables, ignores
-   garbage; reports angle/direction/live rate). Not otherwise
-   started.
+`HasInternalConnections`, built for the stated reason of proving
+    input-driven net switching. Then `StepperMotor` + ULN2003 module —
+    the first *sequence-sensing stateful* component (reads a 4-bit
+    IN1–IN4 pattern in `update()` against hardcoded full/half-step
+    tables, anchors on first contact, re-locks tables, ignores
+    garbage; reports angle/direction/live rate). Then `PIRSensor` —
+    the first *stimulus-driven* component (user `triggerMotion()`
+    gesture via the worker `press` path, hold-burned down by
+    `update(dt)`, OUT driven immediately). Then the **RC timing trio**
+    — `Potentiometer` + `Resistor` (passive MODE_IN *analog producers*
+    publishing a 0..1 resistance fraction on the `analogValue`
+    channel) + `Capacitor` (the active-timer consumer: owns its net's
+    PULL, force-adopts under `digitallyDriven`, otherwise charges a
+    linear clock against `maxChargeSeconds × fraction` and flips the
+    net LOW→HIGH). Then `UltrasonicSensor` (HC-SR04) — the second
+    *stimulus-in / pulse-out* part and the first with a *parametric*
+    stimulus: `setSimulatedDistance(cm|null)` (valid `[2, 400]` cm at
+    `58 µs/cm`) travels its own `top-setSimulatedDistance` message (not
+    the PIR's `press`), and `echo` — an OUT driver idling LOW — pulses
+    HIGH for `cm × 58 µs` on a rising `trig` then LOW (a cross-tick
+    timer). Analog *input* (reading `analogValue` from Python,
+    `machine.ADC`) is still open — see "Next up". Not otherwise
+    started.
 
 Work should generally proceed in this order. Skipping ahead (e.g.
 building canvas polish before the data model is solid, or building
@@ -309,8 +325,9 @@ before deciding to skip ahead again.
   instructions. Keep it updated as work progresses.
 - Next up: remaining validation/error states, `machine.ADC`/analog
   *input*, or `I2C` — `machine.PWM` + LED brightness, the **real
-  40-pin board header**, the **Relay + Transistor switches**, and the
-  **28BYJ-48/ULN2003 StepperMotor** are **done** (see
+  40-pin board header**, the **Relay + Transistor switches**, the
+  **28BYJ-48/ULN2003 StepperMotor**, the **PIR motion sensor**, the **HC-SR04 UltrasonicSensor**, and
+  the **Potentiometer/Resistor/Capacitor RC timing trio** are **done** (see
   the "Resolved / closed items" section below and "Current status
   detail").
 
@@ -348,21 +365,21 @@ before deciding to skip ahead again.
   `CONFLICT`/short state (and any "forbidden wiring" enforcement) remains
   deferred.
 - The `HasStimulus<T>` interface pattern for sensor-style components is
-  documented (`docs/ARCHITECTURE.md`). The first real sensor —
-  `PIRSensor` — is implemented and takes a user-driven
-  `triggerMotion()` stimulus via the worker `press` message (see the
-  ARCHITECTURE section); no generic parameterized stimulus (e.g. a
-  distance-in-cm sensor) exists yet, so `HasStimulus<T>` itself remains
-  unimplemented until one does.
+  documented (`docs/ARCHITECTURE.md`). Two stimulus sensors now exist:
+  `PIRSensor` (parameterless — a user-driven `triggerMotion()` stimulus
+  via the worker `press` message) and `UltrasonicSensor` (parametric —
+  `setSimulatedDistance(cm|null)` via its own `top-setSimulatedDistance`
+  message, the concrete demonstration of the parametric side). A generic
+  `HasStimulus<T>` *interface* still isn't instantiated — each stimulus
+  keeps a bespoke setter, per `docs/DECISIONS.md`.
 - Canvas editor polish (measured auto-layout, richer styling for the
   palette/first-run tutorial) is still deferred; deleting placed
   components is done, so the remaining editor concern is aesthetics, not
   missing capability.
-- Some components (e.g. an ultrasonic distance sensor with
-  trigger/echo timing) will need to track internal state across ticks,
-  not just react statelessly each `update()` call. No component
-  needing this exists yet, but `update(dt)` already takes a `dt`
-  parameter in anticipation of timing-based logic.
+- Cross-tick internal state (private component fields, never pushed into
+  `Circuit.tick()`) is now exercised: `UltrasonicSensor`'s TRIG/ECHO
+  timing and the existing PIR hold / capacitor charge accumulators all
+  burn `update(dt)`. See `docs/COMPONENT_GUIDE.md` step 6's pattern.
 - Python execution limits (see DECISIONS): `machine.ADC`/`I2C` still
   raise ImportError on purpose (PWM now works — see the resolved
   section); `machine.PWM` stores `freq()` but never simulates timing
@@ -463,12 +480,27 @@ before deciding to skip ahead again.
   have their control decision flip in `update()`, so a net change
   reaches the contacts on the second `tick()` — see `docs/DECISIONS.md`
   for the timing rule and the vcc/gnd-inert + no-base-resistor/Vbe
-  simplifications. Views are hand-drawn SVG (`RelayView.tsx` 140×52
-  screw-terminal module; `TransistorView.tsx` TO-92-style, BC547 lead
-  order) because the only relay in `@wokwi/elements` 1.9.2
+  simplifications. Views now render **real parts vendored as static
+  SVG assets** — `RelayView.tsx` (`dfrobot-3v-relay-module.svg`, the actual
+  DFRobot 3V Relay Module DFR0473 with screw terminals + 3-pin header,
+  140×~120.24) and `TransistorView.tsx`
+  (`transistor-to92-npn.svg`, a generic TO-92 NPN, 80×116.566) — replacing the
+  hand-drawn art, because the only relay in `@wokwi/elements` 1.9.2
   (`wokwi-ks2e-m-dc5`) is a bare 8-pad DPDT contactor whose geometry
   can't express the module's `in` pin (and no transistor element
-  exists at all — see `docs/DECISIONS.md`). Canvas PIN_OFFSETS/PIN_STYLE/
+  exists at all — see `docs/DECISIONS.md`). The TO-92's left-to-right leads
+  already read collector/base/emitter, so no label changed; the relay now uses
+  the module's **own silkscreen pinout** (`in`→`D`, `vcc`→`+`, `gnd`→`−`, and
+  `com`/`no`/`nc` on the screw block's `COM`/`NO`/`NC`; the block's `N/A`
+  terminal has no engine pin), so the earlier `gnd`→spare-common `C2` reuse
+  no longer applies. Relay offsets are pixel centroids of the module's own
+  drawn pads/screws (the DFRobot art has no `connectorNpin` markup) —
+  **pixel-proven against the served asset** in browser-verify step 9 —
+  transistor offsets come from its own connector rects. The relay asset is
+  **GPL-3.0, in-house use only** (stronger copyleft than Fritzing's CC BY-SA
+  3.0); both carry deferred-attribution/license TODOs in their headers, and
+  browser-verify asserts sub-pixel alignment for every pin.
+  Canvas PIN_OFFSETS/PIN_STYLE/
   render cases + drop acceptance and worker `addComponent` cases wired;
   palette offers LED/Button/Relay/Transistor. Verified by 9 new engine
   tests (driving control pins over real wires + settled-state and
@@ -516,5 +548,68 @@ before deciding to skip ahead again.
   `in1…in4`/`vcc`/`gnd` pins align to `bodyOrigin + pinInfo` sub-pixel,
   and step 11 asserts both `wokwi-stepper-motor` and
   `app-stepper-motor` register with no define errors).
+- **Potentiometer + Resistor + Capacitor — done.** The RC timing trio
+  (the one-GPIO capacitor-charge measurement recipe): `Resistor`
+  (`terminal1`/`terminal2`) and `Potentiometer`
+  (`terminal1`/`wiper`/`terminal2`) are the first **passive analog
+  producers** — MODE_IN pins (never OUT; a passive part shades a net, it
+  doesn't drive one) publishing a 0..1 resistance fraction directly on
+  the `analogValue` channel. Resistor: `resistanceOhms / 20000`
+  (default 10 kΩ → 0.5, `FULL_SCALE_OHMS` by convention); Potentiometer:
+  `knobPosition` via `setKnobPosition()` (clamped 0..1). Both publish
+  in the constructor/setter AND every `update()` (the PIR/PWM immediacy
+  precedent), so a dropped part or knob turn is live in the same turn's
+  snapshot. This widens *who may produce* analog; `Pin.analogDelivered`
+  (stamped only when the resolver delivers a real non-null value) keeps
+  a delivered listener from ever phantom-conflicting — see
+  `docs/ARCHITECTURE.md` → "`Circuit`". `Capacitor` (`a`/`b`) is the
+  active-timer consumer: `a` is MODE_IN and owns its net's PULL (rewritten
+  every tick); while a real OUT driver holds the net (`a.digitallyDriven`,
+  DRIVE/discharge phase) it force-adopts (HIGH ⇒ charged, LOW ⇒ empty),
+  and otherwise (POLL phase) it accrues `dt × fraction` against a
+  **linear** `maxChargeSeconds × fraction` threshold — no RC curve, no
+  Ω↔s calibration (default `maxChargeSeconds` 2 s; threshold 0 ⇒ instant
+  charge, documented). Crossed ⇒ pull flips UP ⇒ net resolves HIGH.
+  Full recipe: `Resistor.terminal1 — Cap.a — GPIO8`, `Cap.b — GND`.
+  Views: potentiometer is the **third vendoring exception**
+  (`app-potentiometer`, interaction-stripped — the published element's
+  mousedown/drag + hidden input would steal canvas gestures; the knob is
+  a pointer-capture overlay drag relaying `setKnobPosition`), resistor
+  uses the **published `wokwi-resistor` directly** (no handlers, drive
+  the `value` string via ref), capacitor is **hand-drawn SVG** because
+  `@wokwi/elements` has no capacitor element at all — all per
+  `docs/DECISIONS.md`. Canvas/Palette/`setKnobPosition` message/
+  `addComponent` cases wired. Verified by 11 new engine tests, a
+  CircuitHost e2e (full RC pulse: 10 kΩ → `LOW→HIGH` at ≈1.0 s,
+  asserted [0.85, 1.15); knob 0.25 ⇒ ≈0.5 s; addComponent
+  replay-safe), canvas render/drop/knob-drag tests, and
+  `browser-verify.mjs` step 13 (real Python discharge/poll over a wired
+  RC on GPIO8, LOW→HIGH trip within [0.6, 1.4] s; sub-pixel pin
+  assertions for all three parts) — **144 passing + 1 skipped** total,
+  typecheck + build clean.
+- **HC-SR04 UltrasonicSensor — done.** The second *stimulus-in /
+  pulse-out* part and the first with a **parametric** stimulus
+  (`src/engine/components/UltrasonicSensor.ts`): `vcc`/`gnd` inert
+  UNSET, `trig` MODE_IN, `echo` an active-high OUT driver idling LOW.
+  `setSimulatedDistance(cm|null)` (valid `[2, 400]` cm) is the stimulus;
+  `update()` watches for a **rising edge** on `trig` and drives `echo`
+  HIGH for `cm × 58 µs` of accumulated `dt` then LOW — a cross-tick
+  timer. Mid-pulse retriggers are ignored; `null`/out-of-range ⇒ **no
+  echo** (no ~38 ms no-echo timeout — see `docs/DECISIONS.md`). The
+  parametric stimulus does not ride `press` — it is its own
+  `top-setSimulatedDistance` message →
+  `CircuitHost.setSimulatedDistanceMessage`. View = **published
+  `wokwi-hc-sr04` used unchanged** (no interaction handlers at all — a
+  third direct-use part after the resistor; its `pinInfo` ARE the
+  `ultrasonicPinOffsets` surface) plus a linear distance slider under
+  the body (2..400 cm; far end = `null` = "no object"). The bridge
+  gained `micros()`/`tickUs(us)` on a new `CircuitHost` sim clock
+  (`simTimeSeconds`/`getSimTimeMicros()`), so real Python can time a
+  TRIG pulse to the µs despite the fixed 1/60 s tick. Verified by 7 new
+  engine tests, a CircuitHost e2e (routed ECHO on GPIO10 IN: 300 cm →
+  17.4 ms, null → no echo, sim-clock read), canvas render/slider/drop
+  tests, and `browser-verify.mjs` step 14 (real Python TRIG/ECHO over
+  GPIO9/GPIO10, 300/360 cm + NO_ECHO at the null stop) — **160 passing
+  + 1 skipped** total, typecheck + build clean.
 
 ---

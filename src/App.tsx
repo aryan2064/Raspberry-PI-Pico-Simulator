@@ -213,6 +213,27 @@ function App() {
     workerRef.current?.postMessage({ type: "release", componentId });
   }, []);
 
+  // Potentiometer knob drag — straight passthrough to the worker; the engine
+  // publishes the new wiper fraction immediately and the snapshot loop picks
+  // it up (see pyodide.worker.ts handleEdit). No topology change involved.
+  const handleKnobPosition = useCallback((componentId: string, knobPosition: number) => {
+    workerRef.current?.postMessage({ type: "setKnobPosition", componentId, knobPosition });
+  }, []);
+
+  // Ultrasonic distance slider drag — same relay shape as the knob above: the
+  // worker routes it to UltrasonicSensor.setSimulatedDistance() and the
+  // snapshot loop reflects it. null = "no object in front".
+  const handleDistanceChange = useCallback(
+    (componentId: string, simulatedDistanceCm: number | null) => {
+      workerRef.current?.postMessage({
+        type: "setSimulatedDistance",
+        componentId,
+        simulatedDistanceCm,
+      });
+    },
+    []
+  );
+
   // A palette part was dropped on the canvas. Record it in the topology (so a
   // later Stop/respawn rebuilds it), give it its dropped position, and send
   // the same addComponent message the init/replay path uses — the worker
@@ -313,6 +334,8 @@ function App() {
             onDisconnect={handleDisconnect}
             onPress={handlePress}
             onRelease={handleRelease}
+            onKnobChange={handleKnobPosition}
+            onDistanceChange={handleDistanceChange}
             onMoveComponent={handleMoveComponent}
             onPlaceComponent={handlePlaceComponent}
             onDeleteComponent={handleDeleteComponent}

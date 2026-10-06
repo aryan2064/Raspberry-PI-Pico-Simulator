@@ -1,4 +1,4 @@
-import { Button, Circuit, LED, PicoBoard, PIRSensor, Relay, StepperMotor, Transistor } from "../engine";
+import { Button, Capacitor, Circuit, LED, PicoBoard, PIRSensor, Potentiometer, Relay, Resistor, StepperMotor, Transistor, UltrasonicSensor } from "../engine";
 import type { Pin } from "../engine";
 import type {
   AddComponentMessage,
@@ -8,6 +8,8 @@ import type {
   PressReleaseMessage,
   RemoveComponentMessage,
   RunMessage,
+  SetKnobPositionMessage,
+  SetSimulatedDistanceMessage,
   SetupPinMessage,
   SnapshotMessage,
 } from "./messages";
@@ -75,6 +77,12 @@ export class CircuitHost {
       case "setupPin":
         this.setupPinMessage(msg);
         break;
+      case "setKnobPosition":
+        this.setKnobPositionMessage(msg);
+        break;
+      case "setSimulatedDistance":
+        this.setSimulatedDistanceMessage(msg);
+        break;
     }
   }
 
@@ -103,6 +111,18 @@ export class CircuitHost {
         break;
       case "pir":
         this.circuit.addComponent(new PIRSensor({}, msg.componentId));
+        break;
+      case "potentiometer":
+        this.circuit.addComponent(new Potentiometer(msg.componentId));
+        break;
+      case "resistor":
+        this.circuit.addComponent(new Resistor(Resistor.DEFAULT_RESISTANCE_OHMS, msg.componentId));
+        break;
+      case "capacitor":
+        this.circuit.addComponent(new Capacitor({}, msg.componentId));
+        break;
+      case "ultrasonic":
+        this.circuit.addComponent(new UltrasonicSensor(msg.componentId));
         break;
     }
   }
@@ -189,9 +209,43 @@ export class CircuitHost {
     this.circuit.resolveNow();
   }
 
+  // The knob-drag message form of Potentiometer.setKnobPosition(). The wiper
+  // publishes its analog fraction immediately (see Potentiometer), so the
+  // freshly-updated snapshot is already consistent — no resolveNow needed.
+  setKnobPositionMessage(msg: SetKnobPositionMessage): void {
+    const component = this.componentById(msg.componentId);
+    if (!(component instanceof Potentiometer)) {
+      throw new Error(`Component "${msg.componentId}" is not a potentiometer`);
+    }
+    component.setKnobPosition(msg.knobPosition);
+  }
+
+  // The slider-drag message form of UltrasonicSensor.setSimulatedDistance().
+  // null = "no object in front". A drag edits the stimulus only — the snapshot
+  // reflects the new distance immediately.
+  setSimulatedDistanceMessage(msg: SetSimulatedDistanceMessage): void {
+    const component = this.componentById(msg.componentId);
+    if (!(component instanceof UltrasonicSensor)) {
+      throw new Error(`Component "${msg.componentId}" is not an ultrasonic sensor`);
+    }
+    component.setSimulatedDistance(msg.simulatedDistanceCm);
+  }
+
   // ---- one simulation step + snapshot (driven by the worker's own loop) ----
 
+  // Accumulated simulation time, in seconds — advanced once per tick() by the
+  // same dt the circuit steps. This is the engine's shared sim clock; the
+  // bridge's micros() reads it so Python can timestamp TRIG/ECHO pulses. Only
+  // the host's own tick() advances it (never wall-clock), so a Python script
+  // that steps the sim with tickUs() measures stable, reproducible durations.
+  private simTimeSeconds = 0;
+
+  getSimTimeMicros(): number {
+    return this.simTimeSeconds * 1e6;
+  }
+
   tick(dt = 1 / 60): void {
+    this.simTimeSeconds += dt;
     this.circuit.tick(dt);
   }
 

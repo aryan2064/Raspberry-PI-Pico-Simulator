@@ -5,7 +5,7 @@ import type { PinMode, PinPull } from "../engine";
 // messages — never JS object references. Every message shape in both
 // directions lives here so worker and main thread stay in lockstep.
 
-export type ComponentKind = "pico_board" | "led" | "button" | "relay" | "transistor" | "stepper" | "pir";
+export type ComponentKind = "pico_board" | "led" | "button" | "relay" | "transistor" | "stepper" | "pir" | "potentiometer" | "resistor" | "capacitor" | "ultrasonic";
 
 // A pin as seen from the main thread: component id + pin label. Pin OBJECTS
 // live in the worker's Circuit; the main thread never holds a reference.
@@ -25,6 +25,8 @@ export type MainToWorkerMessage =
   | PressReleaseMessage
   | RemoveComponentMessage
   | SetupPinMessage
+  | SetKnobPositionMessage
+  | SetSimulatedDistanceMessage
   | RunMessage;
 
 export interface AddComponentMessage {
@@ -70,6 +72,25 @@ export interface SetupPinMessage {
   gpio: number;
   mode: PinMode;
   pull?: PinPull;
+}
+
+// User drag on a potentiometer's knob: the new 0..1 tap position. The worker
+// routes it to the Potentiometer.setKnobPosition() and re-snapshots (same
+// handleEdit + snapshot loop as every other edit — see pyodide.worker.ts).
+export interface SetKnobPositionMessage {
+  type: "setKnobPosition";
+  componentId: string;
+  knobPosition: number;
+}
+
+// User drag on an ultrasonic sensor's distance slider: the new simulated target
+// distance in cm, or null for "no object in front". The worker routes it to the
+// UltrasonicSensor.setSimulatedDistance() and re-snapshots (same handleEdit +
+// snapshot loop as every other edit — see pyodide.worker.ts).
+export interface SetSimulatedDistanceMessage {
+  type: "setSimulatedDistance";
+  componentId: string;
+  simulatedDistanceCm: number | null;
 }
 
 export interface RunMessage {

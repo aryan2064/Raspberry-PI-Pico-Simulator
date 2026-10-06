@@ -180,14 +180,18 @@ separate:
       resolution itself is untouched.
    e. Propagate the resolved value to every `IN`-mode pin in the net.
    f. **Analog propagation (separate channel).** Mirrors steps a–e but on
-      `analogValue`, not `value`. For each net, find pins where
-      `mode === "OUT"` and `analogValue !== null`. If exactly one such
-      pin, propagate its `analogValue` to every `IN`-mode pin in the
-      net. If zero, leave `IN` pins' `analogValue` as `null`. If more
-      than one, multiple analog drivers are fighting over one net — the
-      same kind of conflict as the digital case, currently resolving to
-      `null` as a placeholder (and flagging the net, like the digital
-      pass).
+      `analogValue`, not `value`. For each net, the *sources* are pins
+      with `analogValue !== null && analytics not yet delivered`
+      (`Pin.analogDelivered === false`) — this deliberately allows
+      MODE_IN producers such as a Potentiometer wiper or a Resistor's
+      terminal1, not just OUT/PWM wave generators (see `analogDelivered`
+      below). If exactly one such pin, propagate its `analogValue` to
+      every `IN`-mode pin in the net **that is not itself a source**
+      (sources keep their own values). If zero, leave `IN` pins'
+      `analogValue` as `null`. If more than one, multiple analog
+      producers (or any OUT pin) are fighting over one net — the same
+      kind of conflict as the digital case, resolving to `null` as a
+      placeholder and flagging the net.
    g. Call `update(dt)` on every component, in registration order.
    h. **Repeat the digital and analog propagation passes (only) — no second
       `update()` call.** A component that writes its own output pin from
@@ -195,6 +199,21 @@ separate:
       `pressed`) has that value re-propagated to listening pins within the
       **same** `tick()`, rather than one tick later. This is why an input
       press is visible to net listeners before `tick()` returns.
+
+   **`Pin.analogDelivered` marks a delivered listener, not a producer.**
+   The resolver stamps it when it writes a **non-null** `analogValue`
+   into a listener pin (a null write — net has no source — only clears
+   stale values and never stamps). This is what makes an IN producer
+   safe to keep producing on later passes: once a pin has *received* a
+   value it can never be re-scored as its net's source, so it cannot
+   phantom-conflict with the true producer; a producer's own freshly
+   published value is always eligible until delivery actually delivers
+   somewhere. `digitallyDriven` is the mirror on the digital channel:
+   set when a net has at least one real OUT driver (conflict nets with
+   two drivers still count, pulls never do). The Capacitor uses it to
+   distinguish "a real GPIO is forcing me" from "my own pull resolved
+   the net" — so it can adopt an external drive but never mistake its
+   own pull for one.
 
    **`resolveNow()`** — `resolveNets()` + `propagate()` only, no
    `update()` and no time advance. It exists for callers that mutate pin
@@ -270,6 +289,39 @@ stays the shared out-of-band input path (Button's press, PIR's
 trigger), and `triggerMotion()` writes `out` immediately so a net
 resolve reveals the HIGH the same instant it is called.
 
+## Passive analog producers & RC timing (implemented: Potentiometer, Resistor, Capacitor)
+
+"Where a specific component needs analog behavior, that math lives
+inside the component's own `update()`" is exactly how the RC trio
+works, but with the analog propagation as a first-class channel. The
+`Potentiometer` (wiper) and `Resistor` (terminal1) are **passive
+producers**: MODE_IN pins that publish a dimensionless fraction on
+`analogValue`, never of OUT-mode (they cannot drive a net, only shade
+it). The `Capacitor` consumes that fraction to run its charge clock and
+drives its net through the normal PULL mechanism:
+
+- **Resistor** publishes `resistanceOhms / 20000` clamped to 0..1
+  (default 10 kΩ → 0.5) from its constructor AND every update, so it is
+  live the moment it is wired.
+- **Potentiometer** publishes `knobPosition` (0..1); `setKnobPosition`
+  clamps + publishes immediately — the worker path for a knob drag is a
+  `setKnobPosition` message (see below).
+- **Capacitor** reads `pin("a").analogValue ?? 0` as the fraction,
+  accumulates a linear charge clock against
+  `maxChargeSeconds × fraction` (default `maxChargeSeconds` = 2 s), and
+  writes `pin("a").pull = charged ? "UP" : "DOWN"` **every tick** — it
+  is the sole owner of that pull. In the DRIVE phase (`a.digitallyDriven`,
+  a real OUT GPIO holds the net) it force-adopts the driver (HIGH ⇒
+  charged, LOW ⇒ empty) instead of polling. The net then resolves
+  through pull-vs-pins exactly like any other net. Full recipe:
+  `Resistor.terminal1 — Cap.a — GPIO8`, `Cap.b — GND`; GPIO8 OUT LOW to
+  discharge, then IN to start the charge; the poll loop reads the
+  LOW→HIGH trip at ≈ `maxChargeSeconds × resistanceFraction`.
+
+See `docs/DECISIONS.md` ("RC timing keeps the sim digital...") for the
+exact model and its deliberate simplifications (linear clock, no
+Ω↔s calibration, single-analog-source nets).
+
 ## Python execution model (implemented)
 
 - **Pyodide** (CPython compiled to WebAssembly) runs entirely
@@ -333,6 +385,10 @@ Main thread → worker:
   (`IN`/`OUT` mode, optional `UP`/`DOWN`/`NONE` pull) without running
   Python. The app's replay path sends one per `topology.pinSetups`
   entry; same shape as the `machine.Pin` bridge's setup.
+- `{ type: "setKnobPosition", componentId, knobPosition }` — a
+  potentiometer knob drag; routes to `Potentiometer.setKnobPosition()`
+  (which publishes the wiper fraction immediately) and re-snapshots,
+  like every other edit.
 - `{ type: "run", code }` — run MicroPython in Pyodide.
 
 Worker → main thread:

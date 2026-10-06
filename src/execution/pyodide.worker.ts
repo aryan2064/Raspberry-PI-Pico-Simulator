@@ -113,6 +113,17 @@ async function ensurePyodide(): Promise<any> {
           host.tick(1 / 60);
           ctx.postMessage(host.getSnapshot());
         },
+        // The sim clock + sub-tick advance used by the browser-verify TRIG/ECHO
+        // measurement script. A single 1/60s tick is ~287 cm of HC-SR04
+        // round-trip time, so at 60fps an echo pulse is only observable for
+        // distances ≳287 cm and never measured correctly — Python must instead
+        // step the sim itself. micros() timestamps on the shared sim clock
+        // (advanced only by tick()/tickUs(), never wall-clock), and tickUs()
+        // advances the circuit in µs increments without posting snapshots, so
+        // a script can wait out an echo affordably. Normal scripts never touch
+        // these — they run the usual 60fps loop.
+        micros: () => host.getSimTimeMicros(),
+        tickUs: (us: number) => host.tick(us / 1e6),
         // machine.PWM — mirror the write pattern above: set duty, then tick
         // (so the LED's update() sees the new analog value immediately) and
         // post a snapshot so the UI reacts in the same turn the Python write

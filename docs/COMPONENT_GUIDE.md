@@ -117,8 +117,46 @@ you haven't — this doc assumes you understand `Pin`, `Component`, and
    the locked table + index, and a `timeSinceStep` accumulator it uses
    to report a true `stepsPerSecond`. Tests drive the four inputs over
    real wires (see `StepperMotor.test.ts`); only ONE `tick()` after a
-   pattern write is needed because all four pins are MODE_IN (no second
-   tick for an internal flip like the relay/transistor).
+pattern write is needed because all four pins are MODE_IN (no second
+    tick for an internal flip like the relay/transistor).
+
+   **Passive analog producers & an RC timer are a fourth pattern.**
+   `Potentiometer` (`terminal1`/`wiper`/`terminal2`) and `Resistor`
+   (`terminal1`/`terminal2`) are **producers on the analog channel**:
+   their active pin is MODE_IN (never OUT — a passive part shades a net,
+   it never drives one) and its `analogValue` is set directly (in the
+   constructor/setter AND every `update()` for immediacy). The
+   `Capacitor` (`a`/`b`) is the active-timer consumer: `a` is MODE_IN,
+   reads its net's resolved `analogValue` as a 0..1 "resistance
+   fraction", accrues a linear charge clock against
+   `maxChargeSeconds × fraction`, and OWNS its net's PULL (writes it
+   every tick). While a real OUT driver holds the net (`a.digitallyDriven`)
+   it force-adopts (DRIVE phase). Run-throughs: `Potentiometer.test.ts`
+   / `Resistor.test.ts` / `Capacitor.test.ts`, plus the end-to-end RC
+   pulse in `CircuitHost.test.ts`.
+
+**A pulse-timing stimulus component is a fifth pattern.**
+   `UltrasonicSensor` (`vcc/trig/echo/gnd`) is the second stimulus-in /
+   pulse-out part (after `PIRSensor`): it has no ranging model — the
+   *distance* is the simulated stimulus (set externally) and its only real
+   behavior is the HC-SR04 TRIG/ECHO pulse. `echo` is an OUT driver that
+   idles LOW, `trig` is MODE_IN; `update()` watches for a **rising edge**
+   on `trig` (tracking the previous value across ticks) and, when a valid
+   non-null distance in `[2, 400]` cm is set, drives `echo` HIGH for
+   `distance × 58 µs` of accumulated `dt` then LOW — a *cross-tick timer*
+   (private `elapsedSeconds`/`echoDurationSeconds`), the exact case step 6
+   names. Retriggers mid-pulse are ignored; there is no ~38 ms no-echo
+   timeout (see `docs/DECISIONS.md`). The stimulus is parametric (a
+   distance, not a boolean), so unlike the PIR it does **not** ride the
+   `press` gesture — it has its own `setSimulatedDistance(cm|null)` and its
+   own worker message (`top-setSimulatedDistance`, routed by
+   `CircuitHost.setSimulatedDistanceMessage`) — the real instantiation of
+   the "parametric stimulus" idea `HasStimulus<T>` was documented for. The
+   distance slice (the engine `[2,400]` range) is a linear slider under the
+   body; dragging to/past the far end is `null` = "no object". Tests drive
+   trig over a wire and assert the echo HIGH→LOW at `58 µs/cm` for several
+   distances, the null/out-of-range no-echo cases, the ignored retrigger,
+   and the end-to-end pulse through `CircuitHost`.
 
 3. **Name every pin with a clear `label`.** Use names that will make
    sense both on a rendered canvas and in a `machine`-shim context if
@@ -143,7 +181,14 @@ official Fritzing part, adopted as a repo asset). Vendor source only
     `src/vendor/wokwi/`), because the published `wokwi-stepper-motor`
     exposes only 4 bipolar cosmetic pins while the module needs a 6-pin
     `in1`–`in4`/`vcc`/`gnd` surface (fed `angleDegrees` via its
-    display-only `angle` property, per `docs/DECISIONS.md`). Vendored
+    display-only `angle` property, per `docs/DECISIONS.md`). The
+    potentiometer is a second interaction-driven vendor
+    (`app-potentiometer` — the published element owns mousedown/drag and
+    would steal canvas gestures from a knob-driven part); the resistor
+    is a plain direct-use `<wokwi-resistor>` (no handlers, drive its
+    `value` string); and the capacitor is hand-drawn SVG (`CapacitorView`,
+    radial electrolytic) because `@wokwi/elements` has **no** capacitor
+    element at all — all three decided in `docs/DECISIONS.md`. Vendored
     source compiled in-repo needs lit's decorators replaced by a static
     `properties` map + constructor defaults + `declare` fields under our
     `useDefineForClassFields` tsconfig, and must register under our own
@@ -170,7 +215,12 @@ official Fritzing part, adopted as a repo asset). Vendor source only
    established. Keep a future parametric sensor in mind: the generic
    `HasStimulus<T>` interface in `docs/ARCHITECTURE.md` is documented
    for when a stimulus has real parameters (distance, level) — don't
-   force a parameterless gesture into it.
+   force a parameterless gesture into it. A parametric stimulus — a
+   value, not a boolean — gets its own top-level worker message routed
+   to a public setter, like `top-setSimulatedDistance` →
+   `CircuitHost.setSimulatedDistanceMessage` →
+   `UltrasonicSensor.setSimulatedDistance()` (the PIR's parameterless
+   gesture stays on `press`).
    Most components (anything that's driven purely by its pins, like
    `LED`) don't need this.
 
@@ -215,10 +265,12 @@ official Fritzing part, adopted as a repo asset). Vendor source only
 - [ ] Passive switch? Implements `HasInternalConnections`, not pin-driving
 - [ ] State-driven switch? Control pin is MODE_IN, flag set in `update()`, decide between `[pair]` / `[pair]` or `[]` per state
 - [ ] Sequence-sensing stateful part? Reads multi-pin pattern in `update()`, hardcoded telltale tables, anchors first contact, ignores garbage, stores angle/direction/rate as fields
-- [ ] Sensor (no input pin) part? Route the worker `press` message to a public stimulus method like `PIRSensor.triggerMotion()`, drive its OUT pin immediately, and mirror the state for `getRenderInfo()`
+- [ ] Passive analog producer / RC timer? Active pin is MODE_IN publishing `analogValue`, capacitor owns the net's PULL and reads the analog fraction as its charge rate
+- [ ] Sensor (no input pin) part? Parameterless stimulus = route `press` to a public method like `PIRSensor.triggerMotion()`; parametric stimulus (a value, e.g. distance) = its own top-level message to a setter like `setSimulatedDistance`; drive the OUT pin / timer and mirror state for `getRenderInfo()`
 - [ ] Added a view (`wokwi` element or static SVG, official part where one exists) with pin offsets + state testids
 - [ ] Wired `renderComponentView` + palette preview
-- [ ] Considered whether a stimulus input (`HasStimulus<T>` / a press-routed stimulus method) applies
+- [ ] Considered whether a stimulus input (`HasStimulus<T>` / a press-routed stimulus method / a parametric top-level message) applies
 - [ ] Considered whether cross-tick state is needed
+- [ ] Pulse-timing stimulus part? Rising-edge trigger detection, cross-tick echo timer at a documented µs/cm constant, null/out-of-range = no echo, retrigger ignored
 - [ ] Wrote a Vitest test covering at least driven + floating cases
 - [ ] No imports from `ui/` or `execution/` anywhere in the new file

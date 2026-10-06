@@ -623,7 +623,9 @@ So the relay is hand-drawn SVG (generic module visual language, no
 commercial-part imitation): 140×52, screw strips on both long edges,
 coil zigzag + status LED. Both NO and NC are modeled so a de-energized
 relay demonstrably blocks the NC path when energized — nothing is
-guessed, the contact geography is just our own.
+guessed, the contact geography is just our own. **Superseded:** the relay
+artwork is now the real Fritzing `basic-relay-6p_1c569ac_002` part — see
+"Relay artwork is now the real Fritzing part" at the end of this file.
 
 Also audited for this task: `@wokwi/elements` 1.9.2 registers exactly
 **50** custom-element tags — one per element file under
@@ -651,7 +653,10 @@ A recursive content scan of the **entire** package for
 `relay`, `transistor`, `bjt`, `npn`, `pnp`, `mosfet`, and `regulator`
 returns **zero occurrences each** — there is no NPN/PNP/MOS transistor
 element and no relay-element beyond the bare-pad `wokwi-ks2e-m-dc5`
-above, which is why the transistor is also hand-drawn.
+above, which is why the transistor was also hand-drawn. **Superseded:**
+both parts now use real Fritzing artwork — see "Relay artwork is now the
+real Fritzing part" and "Transistor artwork is now a real Fritzing TO-92
+part" at the end of this file.
 
 ---
 
@@ -883,3 +888,398 @@ CircuitHost e2e batches the four writes into one tick, while
 browser-verify step 10 writes **only the pin that changes** per half
 table transition (the half table is a one-bit walk), so each write is
 exactly one recognized step and the angle math stays deterministic.
+
+---
+
+**RC timing keeps the sim digital — a linear clock, not an RC curve**
+
+The potentiometer/resistor/capacitor trio reproduces the teaching
+technique "measure time with a capacitor and a GPIO" (the one-pin
+charging measurement), not capacitor physics:
+
+- `Potentiometer` and `Resistor` are **passive analog producers**: their
+  active pin is MODE_IN (never OUT), and they publish a dimensionless
+  "resistance fraction" on the `analogValue` channel. The pot publishes
+  `knobPosition` (0..1); a resistor publishes `resistanceOhms /
+  FULL_SCALE_OHMS` (full scale = **20 kΩ** by convention), defaulting to
+  **10 kΩ** → 0.5. Their other leads are UNSET and inert (wiring
+  realism only, the relay-coil-pin precedent).
+- `Capacitor` is the only new *active-timer* part. Its `a` pin is MODE_IN
+  and **owns its net's pull**; `b` is an inert ground lead. The two
+  phases of the technique:
+  - **DRIVE/discharge**: a real OUT GPIO holds the net, so `a` is
+    `digitallyDriven` and the cap forces itself to match — HIGH ⇒ fully
+    charged + pull UP, LOW ⇒ empty + pull DOWN. This is what
+    "discharge the cap before polling" means, and it is why the cap
+    never misreads its own earlier pull as a driver (see the dedicated
+    `digitallyDriven` distinguish test).
+  - **POLL/charge**: the GPIO flips to IN, no OUT drivers remain, and the
+    ONLY forces on the net are the weak pulls (the cap's own) and the
+    resistor/pot's analog fraction. Each tick the cap accumulates
+    `dt × fraction` against a **linear** threshold
+    `thresholdSeconds = maxChargeSeconds × fraction` (default
+    `maxChargeSeconds` **2 s**). When crossed, the pull flips UP and the
+    net resolves HIGH through the pull — the GPIO reads the awaited
+    LOW→HIGH transition. No exponential charging curve, no ohms↔seconds
+    calibration: `maxChargeSeconds × fraction` IS the documented model,
+    exactly (and therefore the same RC voltage-divider question the
+    recipe teaches — the capacitor charges slower for a bigger
+    resistance).
+- Fraction contributions keep the existing net rules: one analog source
+  per net (two resistors on one net = an analog conflict), and the
+  analog `analogValue` channel is unchanged — only *who may produce it*
+  widened (see the engine `analogDelivered` marker + the "mode-IN analog
+  sources" decision below).
+- `setKnobPosition(...)` publishes the wiper fraction immediately (the
+  PIR/PWM immediacy precedent) so a knob turn is live in the snapshot
+  the turn's message returns, not one tick later.
+
+---
+
+**Analog sources may be MODE_IN pins — the `analogValue` channel is not
+limited to OUT/PWM producers**
+
+The pot wiper and the resistor's terminal1 are IN by design (a passive
+element is a *producer of a voltage, not a driver of a level*). Before
+this change the analog pass only ever let wave-generating OUT pins be
+sources, so these parts had no channel to publish on. Two small engine
+additions make it safe:
+
+- `Pin.analogDelivered` — set only when the resolver **delivers a real
+  (non-null) analog value** into a listener (null writes simply clear
+  stale values and never stamp it). This is what keeps such a producer
+  from being re-scored as a source on later passes: a delivered
+  listener can never phantom-conflict with the true source, while a
+  producer's own freshly-published value is always eligible.
+- A source skips the write loop, so a component-driven IN producer keeps
+  its own value (and its lack of the delivered marker) intact.
+- The multi-source rule is unchanged: more than one eligible producer —
+  or any OUT pin — on a net still marks the net as an analog conflict.
+
+---
+
+**Potentiometer view vendors + modifies `@wokwi/elements`' potentiometer as `app-potentiometer` — a third justified vendoring exception**
+
+`wokwi-potentiometer` was actually the FIRST vendor candidate to be held
+back by interaction, not pins: its own `down()`/`move()` handlers call
+`stopPropagation()`/`preventDefault()` on mousedown and then rotate via
+a circular `getScreenCTM` drag feeding a hidden `<input type=range>`
+through `InputEvent`s. Under our snapshot engine the element must be a
+**passive display** of `knobPosition` (the engine is the source of
+truth), and its handlers would swallow canvas-level clicks and drags —
+drag a knob and the component would never move, and knob motion would
+fight the snapshot. So the source is vendored and modified (verified
+there is no alternative: `slide-potentiometer` is a different form
+factor with the same ownership problem):
+
+- all interaction machinery and the hidden input removed; `knobPosition`
+  (0..1) is the single property, with the upstream startDegree −135 /
+  endDegree 135 constants folded into the knob-angle math;
+- registered as **`app-potentiometer`** under our own tag (the package's
+  `wokwi-potentiometer` registration stays untouched), with the same
+  decorator fix (`static properties` + constructor default + `declare` +
+  explicit `customElements.define`) as the stepper/PIR vendors;
+- `pinInfo` unchanged — `GND`/`SIG`/`VCC` at (29/39/49, 68.5) — it IS
+  the canvas marker surface (`potPinOffsets`), asserted to sub-pixel
+  tolerance in browser-verify step 13 alongside the PIR/stepper checks;
+- the knob TURN is a pointer-capture drag on an overlay sized to the
+  knob ellipse in `PotentiometerView` (vertical travel maps 0..1 over a
+  fixed client-pixel range; `stopPropagation` on the overlay's
+  pointerdown keeps the canvas body-drag out), and the result relays as
+  a top-`setKnobPosition` message → `CircuitHost.setKnobPositionMessage`
+  → engine, which publishes the snapshot immediately.
+- Wokwi's MIT license is preserved with a `TODO` for public attribution,
+  as with the other vendors.
+
+---
+
+**Resistor uses the published `wokwi-resistor` unchanged — no vendoring**
+
+Keyboard-row reality: the resistor is the only new part whose published
+element fits as-is. `wokwi-resistor` has **no interaction handlers at
+all** (a leaf display whose `value` string is reflected as the four
+standard color bands), so the ref-property pattern (`LedView`) drives
+`value = String(resistanceOhms)` from the snapshot with zero conflict.
+Its `pinInfo` — terminal1 (0, 5.65) / terminal2 (58.8, 5.65) at the
+natural 59.14×11.34 px size — is the canvas marker surface
+(`resistorPinOffsets`), kept under the "use the published package by
+default" rule with no exception.
+
+---
+
+**Capacitor is hand-drawn SVG — `@wokwi/elements` has no capacitor at all**
+
+Verified directly in the installed `@wokwi/elements` 1.9.2 package:
+enumerating `dist/esm/*.js` yields **50** registered elements and none
+is a capacitor (the only passives are `resistor`, `potentiometer`,
+`slide-potentiometer`, and `photoresistor-sensor`); a recursive grep
+for `capacitor`/`CapacitorElement` confirms zero matches. The Fritzing
+parts repo has candidate SVGs, but they are static third-party assets
+outside the "official part where one exists" rule, and there is no
+published element whose art the engine could drive anyway — so, per the
+relay/transistor precedent, `CapacitorView` draws a radial electrolytic
+can by hand (blue body, orange polarity stripe, top plate symbol) whose
+charge state is shown as a green→amber fill rising through the can plus
+an amber vent/rim glow + status dot when `charged`. The `a`/`b` leg tips
+in the art ARE the canvas markers (`capacitorPinOffsets`). Browser-verify
+asserts the offsets against the art's own geometry (there is no
+`pinInfo` to diff against; the PIR/stepper/pot checks already cover that
+pattern for element-backed parts).
+
+---
+
+**Ultrasonic sensor uses the published `wokwi-hc-sr04` unchanged — a third
+passive/published part, and the newest Resistor situation, not a vendoring
+exception**
+
+Verified three tiers before touching anything (same evidence standard as the
+PIR/stepper/pot vendors):
+
+- The registered-tags audit already lists `wokwi-hc-sr04` among the 50
+  elements in `@wokwi/elements` 1.9.2, and the package's index requires
+  `./hc-sr04-element`, so the tag is already live via main.tsx's single
+  `import "@wokwi/elements"`.
+- The compiled `dist/cjs/hc-sr04-element.js` source has **zero interaction
+  handlers** — a recursive search finds no `mousedown`/`mousemove`/
+  `mouseup`/`touchstart`/`click`, no hidden `<input>`, no
+  `stopPropagation`/`preventDefault`, and no stateful properties at all
+  (its `.d.ts` exposes only `pinInfo` + `render()`). It is pure static SVG,
+  exactly passive like `wokwi-resistor`, so there is nothing to fight the
+  snapshot engine and no state to mirror — no vendoring, no `main.tsx`
+  edit (VCC/TRIG/ECHO/GND pinInfo at (71.3, 81.3, 91.3, 101.3, 94.5) on the
+  natural 170.1×94.5 px at 3.78 px/mm IS the canvas marker surface,
+  `ultrasonicPinOffsets`, asserted sub-pixel in browser-verify step 14).
+
+Part of the visual audit is doing the economics: the stepper/PIR/pot
+vendors exist because their published elements *drive* or *own* state; an
+element that does neither is the default-path case the "use the published
+package" rule was written for.
+
+---
+
+**Ultrasonic sensor model: TRIG/ECHO time-of-flight pulse, distance is a
+simulated stimulus — no ranging physics, no echo timeout**
+
+The HC-SR04 is the second stimulus-in / pulse-out component (after the
+PIR): the stimulus comes from OUTSIDE the circuit (`setSimulatedDistance`,
+driven by the slider) and the response is the sensor's only real behavior —
+the round-trip pulse.
+
+- Pins: `vcc`/`gnd` inert UNSET (relay/PIR precedent); `trig` MODE_IN; `echo`
+  is an active-high OUT driver that **idles LOW** (never floating).
+- A **rising edge** on `trig` arms a measurement. `echo` goes HIGH the
+  moment the edge lands (the edge is treated as occurring one `dt` before
+  `update()`, so a zero-dt tick starts the echo at 0 elapsed) and stays HIGH
+  for `simulatedDistanceCm × 58 µs` — the vendor's standard speed-of-sound
+  round-trip constant (174 m/s of flight at 343 m/s = 58 µs/cm). When the
+  accumulated `update(dt)` time reaches the duration, the echo drops LOW.
+- Range: distances outside `[2, 400]` cm (the real factory spec) and
+  `null` ("no object in front") **never start an echo** — no pulse at all,
+  matching a real module whose target is out of range or absent.
+- Simplifications, all deliberate (teaching pin-logic, not acoustics):
+  only the RISING edge is honored — no minimum TRIG pulse-width validation,
+  no sub-µs width timing; a rising edge **while an echo is already in
+  flight is ignored** (a real module does not restart an in-progress pulse);
+  and there is **no internal ~38 ms "no echo" timeout pulse** — the module's
+  documented busy-timeout exists to handle a broken target, and modeling it
+  would only produce an echo where the digital contract says "no object".
+
+**The distance slide is one linear control (2..400 cm), and dragging to/past
+its far end means "no object"**
+
+The slider is a single horizontal track under the body (not a second canvas
+obstacle): fraction p∈[0,1) maps to cm = 2 + p×398; **p ≥ 1.0 (dragged to or
+past the far end) is `null`** — "nothing in front", the real sensor's
+>max-range meaning. The thumb sits at the far end for `null` and a
+left-drag from there picks a real distance again. The overlay
+pointer-captures and `stopPropagation()`s exactly like the pot knob, so the
+sweep can never drag the body around the canvas. The engine range `[2,400]`
+is the slider's full travel, so 400 cm exactly is engine-reachable but not
+slider-reachable (the stop above it is "no object") — documented, tested.
+
+**A single sim tick is ~287 cm of HC-SR04 round-trip — so browser-verified
+pulse math is driven by two host bridge primitives, not a new tick rate**
+
+`pyodide.worker.ts` steps the sim at fixed `1/60`s (16.67 ms) per tick — the
+RC/stepper timing was built against that cadence and it must not change. But
+an HC-SR04 echo at teaching distances (2–400 cm → 116 µs–23.2 ms) is mostly
+**shorter than one tick**: a naive real-Python `value()` poll under the
+busy-wait (which freezes the sim) or the JSPI sleep (which advances only in
+16.67 ms quanta) can only ever see pulses ≳287 cm, and never measure one.
+Rather than retarget the global tick:
+
+- `CircuitHost` now owns a **shared sim clock** (`simTimeSeconds`, advanced
+  only by `tick()`, never wall-clock) exposed as `getSimTimeMicros()`;
+- the worker bridge gains **`micros()`** (read the sim clock) and
+  **`tickUs(us)`** (step the circuit in µs without snapshot spam) — the
+  verification-only primitives browser-verify's step 14 uses to time TRIG
+  high→ECHO low in real Python;
+- `machine-shim.py` is **untouched**; no Python the UI runs needs these
+  primitives. The pulse math stays exact: `t_start = micros()` before the
+  `write(1)` (whose own tick adds exactly 16667 µs of echo in-flight), then
+  `tickUs(1)`-stepping until the echo drops gives `t1 − t_start` =
+  `cm × 58` µs to the µs — 300 cm → 17400 µs, verified live.
+
+---
+
+**Relay artwork is now the real Fritzing part `basic-relay-6p_1c569ac_002`, and `gnd` deliberately lands on the spare second common `C2`**
+
+The relay is no longer hand-drawn. The artwork is the breadboard view of
+fritzing/fritzing-parts' 6-pin generic SPDT relay, shipped as a static asset
+(`src/ui/assets/basic-relay-6p.svg`) the same way the Pico board is:
+
+- part: `core/basic-relay-6p_1c569ac_002.fzp` ("Relay", SPDT, THT)
+- art: `svg/core/breadboard/basic-relay-6p_1c569ac_002.svg`
+- <https://github.com/fritzing/fritzing-parts/blob/develop/svg/core/breadboard/basic-relay-6p_1c569ac_002.svg>
+
+**The originally audited path does not exist.** `core/basic-relay.fzp` and
+`svg/core/breadboard/relay_reloaded.svg` both 404 on `develop`. The upstream
+file's own `<desc>` records its origin as `relay_reloaded.svg`, so that is the
+name the part shipped under before fritzing-parts renamed it — the audited
+candidate is this same part under its current name. Pin geometry is read from
+the asset's own `<rect id="connectorNpin">` tabs, never eyeballed, at the
+part's own `viewBox="-20 -10 560 445"` scaled to the previous 140-wide body
+(scale 0.25 → 140×111.25, aspect preserved exactly).
+
+**The pin mapping is deliberate, and one entry is a simplification:**
+
+| engine label | part connector | why |
+|---|---|---|
+| `in` | `COIL1` (`connector1pin`) | coil control |
+| `vcc` | `COIL2` (`connector4pin`) | coil supply |
+| `com` | `C1` (`connector2pin`) | switch common |
+| `no` | `A` (`connector0pin`) | normally open |
+| `nc` | `B` (`connector5pin`) | normally closed |
+| `gnd` | `C2` (`connector3pin`) | **spare second common** |
+
+A bare SPDT relay has a **two-lead coil and no ground lead at all**, while the
+engine models a relay *module* whose control side is `in`/`vcc`/`gnd`. Fritzing
+ships no module-style relay to match: every relay in `core/` is either a bare
+relay (`sparkfun-electromechanical-relay-pth*` = 5 pins, `TE_RELAY` = 4,
+`DIP_Relay_D31A` = 8, WeMos shields = 19) or this 6-pin bare part, and
+`contrib/` contains no relay module at all. This part is the only structural
+match (6 connectors for 6 logical pins), so `gnd` is placed on `C2`, the
+part's second switch common. That single reuse is a **documented
+simplification, not an error**: it keeps all six engine pins wireable, the
+engine's pin semantics are untouched, and no pin label changed. Verified
+sub-pixel in browser-verify step 9 (worst |dx| = 0.015, |dy| = 0.016 stage
+units, the same residual every other component shows).
+
+---
+
+**Transistor artwork is the real Fritzing `transistor_signal_NPN_TO92_CBE` — a generic TO-92, so the SOT-23 fallback was not needed**
+
+The earlier audit had only identified a surface-mount
+`sparkfun-discretesemi-transistor_npn-sot23.fzp` as a fallback. Searching
+`core/` specifically for a generic through-hole package turned up a proper
+one, so the fallback was **not** used:
+
+- part: `core/transistor_signal_NPN_TO92_CBE.fzp` ("NPN-Transistor", `TO92 [THT]`)
+- art: `svg/core/breadboard/transistor_npn.svg` (shared generic TO-92 art)
+- <https://github.com/fritzing/fritzing-parts/blob/develop/svg/core/breadboard/transistor_npn.svg>
+
+Chosen over SOT-23 for two reasons: it is the classic black 3-legged TO-92
+silhouette the component is meant to look like, and — decisively — its real
+left-to-right lead order **already matches** the BC547 reading the engine was
+using, so `collector`/`base`/`emitter` stayed exactly as they were. The
+`.fzp`'s breadboard mapping is the legacy-scrambled kind (`connector0`, named
+`E`, points at `connector2pin`), so lead identity was resolved from the part's
+geometry, not from the connector names: `connector0pin` (x=0) = left =
+**collector**, `connector1pin` (x=7.181) = centre = **base**,
+`connector2pin` (x=14.367) = right = **emitter**. Offsets come from those
+rects at the part's own `viewBox="0 0 16.527 24.081"` scaled to the previous
+80-wide body (→ 80×116.566 — a TO-92 with its leads is taller than it is
+wide). Verified sub-pixel in browser-verify step 9 (worst |dx| = 0.015,
+|dy| = 0.016).
+
+---
+
+**Fritzing assets are CC BY-SA 3.0 — share-alike is stricter than MIT, and attribution stays deferred on both files**
+
+Both new assets come from fritzing-parts, which is **CC BY-SA 3.0**. That
+matters more than the MIT terms covering `@wokwi/elements`: CC BY-SA's
+**share-alike** term can reach derivative works, so it applies to these two
+files specifically, not to the project as a whole. Both files carry a
+one-line `TODO: add Fritzing CC BY-SA 3.0 attribution before any public
+release/sharing` in their header, matching the standing deferred-attribution
+policy already applied to the vendored stepper/PIR/potentiometer elements —
+deliberately **deferred, not forgotten**. The only change to either file is
+that header comment (the drawing markup is byte-identical to upstream, verified
+by diffing against a fresh fetch), and each asset's XML declaration was
+dropped because a comment ahead of `<?xml?>` is a fatal XML parse error when
+an SVG is loaded through `<image>`. A full attribution file is not written yet,
+consistent with the rest of the project; add it before any public release.
+
+---
+
+**Relay artwork is now the real DFRobot 3V Relay Module (DFR0473) — GPL-3.0, in-house only, and the pin mapping is now the module's own silkscreen, not a reuse**
+
+The Fritzing `basic-relay-6p` part above was, by definition, a **bare SPDT
+relay** — so the module-style engine interface (`in`/`vcc`/`gnd` +
+`com`/`no`/`nc`) had to be forced onto it, including the awkward `gnd` → spare
+common `C2` reuse. The task's target is a relay *module* with screw terminals
+and a 3-pin control header, and DFRobot ships exactly that as a product
+drawing, so the relay visual is replaced with the real module:
+
+- repo: <https://github.com/DFRobot/DFRobot_3V-Relay-Module>
+- file: `3V Relay Module V1.0 SVG.svg`, product **DFR0473** (Gravity 3V Relay
+  Module, 38 × 33 × 20 mm board), schematic coil label **HF3FD** (the relay
+  packages HC part number)
+- vendored: `src/ui/assets/dfrobot-3v-relay-module.svg`
+
+**License notes — this one is different from everything else shipped so far.**
+The DFRobot repo carries a **GNU GPL v3 LICENSE** (2007-06-29), which is *not*
+MIT (`@wokwi/elements`) and *not* CC BY-SA 3.0 (fritzing-parts). GPL-3.0's
+copyleft can reach derivative files, so this single asset is **in-house use
+only and is not publicly distributed**. The vendored file's header carries:
+`GPL-3.0`, the upstream URL, an explicit "in-house only, not publicly
+distributed" note, and `TODO: revisit this license (or add required
+attribution) before ANY public release`. Same deferred-not-forgotten policy as
+the other sourced art, but the license is heavier, so the TODO is marked
+stronger.
+
+**Artwork adaptation.** The upstream SVG is a full Inkscape A4 page
+(744.09 × 1052.36) with **no viewBox** and the module drawn at x 211–335,
+y 566–672.5. The vendored file adds `viewBox="211 566 124 106.5"` (crops the
+page to the board; aspect preserved exactly) and drops the XML declaration so a
+comment can lead the file (same fatal-parse fix as the Fritzing assets). No
+drawing geometry changed; the only other edits are the leading comment.
+
+**Pin geometry — measured, not eyeballed.** The module has **no
+`connectorNpin` markup**, so `RelayView`'s offsets are area-weighted **pixel
+centroids** of the module's own drawn connection metal, computed by probing the
+served asset (`scripts/probe-dfrobot-centroids.mjs`): the 3 solder-pad-pair
+centroids of the 3-pin "Gravity 3P Interface" header on the right and the 4
+screw-eye centroids of the wiring terminal block on the left. Anchor points
+(asset units, origin 211,566):
+
+| engine label | part contact | asset anchor (x, y) |
+|---|---|---|
+| `in` | `D` header pad | (306.63, 626.688) |
+| `vcc` | `+` header pad | (306.923, 618.791) |
+| `gnd` | `-` header pad | (307.322, 611.203) |
+| `com` | `COM` screw eye | (222.751, 636.986) |
+| `no` | `NO` screw eye | (222.793, 615.392) |
+| `nc` | `NC` screw eye | (222.768, 604.423) |
+| (none) | `N/A` screw eye | (222.676, 626.043) |
+
+The `N/A` terminal is silk-screened "N/A" (not available) as the real module's
+quirk; it is drawn but has **no engine pin** — the engine only ever wires six.
+
+This mapping is the module's real silkscreen, so the earlier `gnd`→spare-common
+simplification is **gone**: each engine label now sits on the contact its name
+means. No engine logic changes, no pin label changes — only the art and the
+offset sources.
+
+**Verification.** browser-verify step 9 proves the anchors against the *served
+asset's own pixels* — the module art is rasterized offscreen exactly as
+RelayView draws it (the image fills the board-cropping viewBox "211 566 124
+106.5"), and every anchor's 3×3 neighbourhood must be drawn module art (pad
+grey, dark screw, copper eye, pin hole — not white page, not green PCB, not
+pale-cream silkscreen); then the DOM pin marker must land sub-pixel on that
+anchor. This is the same guarantee the old Fritzing `connectorNpin` tabs
+provided, adapted to an asset that carries none of its own.
+
+The Fritzing relay/transistor sections above remain as historical record: the
+transistor is unchanged, and the bare-relay reading (`in`→`COIL1`,
+`gnd`→spare `C2`) still applies to *that* part — it just no longer ships.

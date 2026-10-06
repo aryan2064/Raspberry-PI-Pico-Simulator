@@ -1,101 +1,87 @@
-import type { PinOffsetMap } from "../types";
+import type { PinOffsetMap, Vec } from "../types";
+import relayArtUrl from "../assets/dfrobot-3v-relay-module.svg";
 
-// Hand-drawn SPDT relay-module art: a generic rectangular module with two
-// screw-terminal strips — the SWITCH side on top (nc/com/no) and the CONTROL
-// side below (in/vcc/gnd). Standard module visual language only; not modeled
-// on any specific commercial part (see docs/DECISIONS.md for why the wokwi
-// relay element wasn't used). Pin offsets sit on the screw-hole centers, which
-// is exactly where the module's hookup wires land.
+// Real DFRobot artwork (DFRobot/DFRobot_3V-Relay-Module, GPL-3.0): the product
+// drawing "3V Relay Module V1.0 SVG.svg" for DFR0473, the Gravity 3V Relay
+// Module (38 x 33 x 20 mm board), shipped as a static asset — the same approach
+// as the Pico board. This replaces the hand-drawn module art. Source URL,
+// license and the in-house-only + deferred-attribution TODO live in the asset's
+// own header comment and in docs/DECISIONS.md.
+//
+// PIN MAPPING: this is the real module, so the engine's six-pin interface maps
+// straight onto its silkscreen labels — no reuse, no relabelling:
+//   in -> D, vcc -> +, gnd -> -  (the "Gravity 3P Interface" header, right)
+//   com -> COM, no -> NO, nc -> NC (the 4-pin wiring terminal block, left)
+// The block's N/A (not-available) terminal is literally silk-screened as such
+// and has no engine pin; it is drawn but never wired.
 export const RELAY_W = 140;
-export const RELAY_H = 52;
-export const relayPinOffsets: PinOffsetMap = {
-  nc: { x: 25, y: 5 },
-  com: { x: 70, y: 5 },
-  no: { x: 115, y: 5 },
-  in: { x: 25, y: 47 },
-  vcc: { x: 70, y: 47 },
-  gnd: { x: 115, y: 47 },
+// The vendored asset's viewBox crops the Inkscape A4 page to the module's
+// drawing: "211 566 124 106.5" (the board spans 124 x 106.5 user units at
+// origin 211,566). Scaling to the 140-wide body preserves the aspect exactly.
+export const RELAY_H = 106.5 * (RELAY_W / 124); // 120.2419...
+
+const RELAY_VIEWBOX = { x: 211, y: 566, w: 124, h: 106.5 };
+const RELAY_SCALE = RELAY_W / RELAY_VIEWBOX.w;
+
+// Engine label -> centre of that pin's actual connection metal, measured from
+// the asset itself (the module has no connectorNpin markup). These are
+// area-weighted pixel centroids of the drawn pads/screws, computed by probing
+// the served asset — screw-eye centroids for the four wiring-block terminals,
+// solder-pad-pair centroids for the three header pins. Nothing is eyeballed;
+// the numbers, the measuring probe and the method are recorded in
+// docs/DECISIONS.md and re-verified by scripts/browser-verify.mjs against the
+// served file's own pixels.
+const RELAY_PIN_ANCHORS: Record<string, Vec> = {
+  in: { x: 306.63, y: 626.688 }, // D header pad
+  vcc: { x: 306.923, y: 618.791 }, // + header pad
+  gnd: { x: 307.322, y: 611.203 }, // - header pad
+  com: { x: 222.751, y: 636.986 }, // COM screw eye
+  no: { x: 222.793, y: 615.392 }, // NO screw eye
+  nc: { x: 222.768, y: 604.423 }, // NC screw eye
 };
+
+function buildRelayPinOffsets(): PinOffsetMap {
+  const offsets: PinOffsetMap = {};
+  for (const [label, center] of Object.entries(RELAY_PIN_ANCHORS)) {
+    offsets[label] = {
+      x: +((center.x - RELAY_VIEWBOX.x) * RELAY_SCALE).toFixed(3),
+      y: +((center.y - RELAY_VIEWBOX.y) * RELAY_SCALE).toFixed(3),
+    };
+  }
+  return offsets;
+}
+
+// Header pins sit on the right at x ≈ 107.97 and screw terminals on the left at
+// x ≈ 13.25, each spread down the body (offset.y grows with the anchor's y).
+export const relayPinOffsets: PinOffsetMap = buildRelayPinOffsets();
 
 interface RelayArtProps {
   energized: boolean;
 }
 
-// Pure SVG body art, exported for reuse by the palette preview. `energized`
-// only changes the status LED fill — the contact strip layout never moves.
-export function RelayArt({ energized }: RelayArtProps) {
+// Component body art: the vendored DFRobot 3V Relay Module alone (one unified
+// visual — the hand-drawn board is gone), drawn at the asset's own viewBox so
+// the pin markers land exactly on the module's drawn pads and screw eyes. The
+// upstream part is static artwork, so `energized` is not painted here; the
+// worker stays the single source of truth for it and RelayView mirrors it as
+// data-energized. Exported for the palette preview.
+export function RelayArt(_props: RelayArtProps) {
   return (
     <svg
       width={RELAY_W}
       height={RELAY_H}
-      viewBox={`0 0 ${RELAY_W} ${RELAY_H}`}
+      viewBox={`${RELAY_VIEWBOX.x} ${RELAY_VIEWBOX.y} ${RELAY_VIEWBOX.w} ${RELAY_VIEWBOX.h}`}
       xmlns="http://www.w3.org/2000/svg"
     >
-      {/* switch-side terminal strip (top) */}
-      <rect x={0} y={0} width={RELAY_W} height={10} rx={2} fill="#cfc9b8" stroke="#a89a6a" />
-      {/* control-side terminal strip (bottom) */}
-      <rect x={0} y={RELAY_H - 10} width={RELAY_W} height={10} rx={2} fill="#cfc9b8" stroke="#a89a6a" />
-      {/* module body */}
-      <rect x={4} y={10} width={RELAY_W - 8} height={RELAY_H - 20} rx={4} fill="#f6f1e3" stroke="#a89a6a" />
-      {/* switch-side screw terminals: nc / com / no */}
-      {[25, 70, 115].map((cx) => (
-        <g key={cx}>
-          <circle cx={cx} cy={5} r={4} fill="#4a4235" />
-          <circle cx={cx} cy={5} r={1.8} fill="#8a857a" />
-        </g>
-      ))}
-      {/* control-side screw terminals: in / vcc / gnd */}
-      {[25, 70, 115].map((cx) => (
-        <g key={cx}>
-          <circle cx={cx} cy={RELAY_H - 5} r={4} fill="#4a4235" />
-          <circle cx={cx} cy={RELAY_H - 5} r={1.8} fill="#8a857a" />
-        </g>
-      ))}
-      {/* coil symbol (left) */}
-      <path
-        d="M 16 31 L 18 20 L 22 31 L 26 20 L 30 31"
-        fill="none"
-        stroke="#6b6b6b"
-        strokeWidth={1.5}
-        strokeLinejoin="round"
+      <image
+        href={relayArtUrl}
+        x={RELAY_VIEWBOX.x}
+        y={RELAY_VIEWBOX.y}
+        width={RELAY_VIEWBOX.w}
+        height={RELAY_VIEWBOX.h}
+        preserveAspectRatio="none"
+        style={{ pointerEvents: "none" }}
       />
-      {/* coil supply stubs (vcc/gnd realism) */}
-      <line x1={16} y1={32} x2={16} y2={37} stroke="#6b6b6b" strokeWidth={1.5} />
-      <line x1={30} y1={32} x2={30} y2={37} stroke="#6b6b6b" strokeWidth={1.5} />
-      {/* status LED: green when the coil is energized */}
-      <circle cx={52} cy={21} r={3.4} fill={energized ? "#2ecc40" : "#a09a8a"} />
-      <circle cx={52} cy={21} r={1.4} fill={energized ? "#b8ffb8" : "#cfc9b8"} />
-      {/* part label */}
-      <text
-        x={98}
-        y={28}
-        textAnchor="middle"
-        fontSize={13}
-        fontWeight={700}
-        fill="#4a4235"
-        style={{ fontFamily: "inherit" }}
-      >
-        RELAY
-      </text>
-      {/* contact labels */}
-      <text x={25} y={40} textAnchor="middle" fontSize={6} fill="#6b6455">
-        nc
-      </text>
-      <text x={70} y={40} textAnchor="middle" fontSize={6} fill="#6b6455">
-        com
-      </text>
-      <text x={115} y={40} textAnchor="middle" fontSize={6} fill="#6b6455">
-        no
-      </text>
-      <text x={25} y={12} textAnchor="middle" fontSize={6} fill="#6b6455">
-        in
-      </text>
-      <text x={70} y={12} textAnchor="middle" fontSize={6} fill="#6b6455">
-        vcc
-      </text>
-      <text x={115} y={12} textAnchor="middle" fontSize={6} fill="#6b6455">
-        gnd
-      </text>
     </svg>
   );
 }
@@ -106,9 +92,9 @@ interface RelayViewProps {
   selected?: boolean;
 }
 
-// Static hand-drawn view — nothing to press, so (unlike ButtonView) there are
-// no onPress/onRelease handlers. The worker is the single source of truth for
-// `energized`; the view just mirrors it as a data attribute + LED color.
+// Static view apart from the worker's state. Nothing to press, so (unlike
+// ButtonView) there are no onPress/onRelease handlers; the worker is the single
+// source of truth for `energized`, mirrored here as a data attribute.
 export function RelayView({ renderInfo, selected }: RelayViewProps) {
   const { energized } = renderInfo;
   return (

@@ -158,6 +158,9 @@ class Circuit {
 
       for (const p of pins) {
         p.hasConflict = conflict;
+        // Whether some OUT pin is actively driving this net (a real driver,
+        // conflict nets included). A pull is never a driver.
+        p.digitallyDriven = drivers.length > 0;
         if (p.mode === "IN") {
           p.value = resolvedValue;
         }
@@ -167,17 +170,25 @@ class Circuit {
     // Analog propagation — runs alongside the digital step above, on the
     // separate analogValue channel. Same conflict-handling placeholder as
     // the digital case: real conflict/short-circuit detection is deferred
-    // to the validation-states phase, so multi-driver analog nets resolve
+    // to the validation-states phase, so multi-source analog nets resolve
     // to null rather than a dedicated conflict state.
+    //
+    // Sources are ANY pin carrying a non-null analogValue (mode no longer
+    // matters — passive analog producers like a Potentiometer's wiper or a
+    // Resistor's terminal1 are IN pins), EXCLUDING pins whose analogValue was
+    // delivered by THIS pass on an earlier tick (Pin.analogDelivered). The
+    // exclusion is what stops a delivered listener value (e.g. a Capacitor's
+    // `a`) from re-qualifying as a second source and phantom-conflicting with
+    // the resistor that actually produced it.
     for (const pins of this.nets.values()) {
-      const analogDrivers = pins.filter(
-        (p) => p.mode === "OUT" && p.analogValue !== null
+      const analogSources = pins.filter(
+        (p) => p.analogValue !== null && !p.analogDelivered
       );
 
       let resolvedAnalog: number | null = null;
-      if (analogDrivers.length === 1) {
-        resolvedAnalog = analogDrivers[0].analogValue;
-      } else if (analogDrivers.length > 1) {
+      if (analogSources.length === 1) {
+        resolvedAnalog = analogSources[0].analogValue;
+      } else if (analogSources.length > 1) {
         resolvedAnalog = null;
       }
 
@@ -185,13 +196,24 @@ class Circuit {
       // digital-only conflict is never cleared by the analog pass (or vice
       // versa) — the flag reflects the net, not the channel.
       const conflict =
-        analogDrivers.length > 1 ||
+        analogSources.length > 1 ||
         pins.filter((p) => p.mode === "OUT").length > 1;
 
       for (const p of pins) {
         p.hasConflict = conflict;
-        if (p.mode === "IN") {
+        // Write resolvedAnalog only into IN *listener* pins. Source pins are
+        // skipped so a component-driven IN producer keeps its OWN value and
+        // never gets the analogDelivered marker (which would wrongly retire
+        // it from producing on the next pass).
+        if (p.mode === "IN" && !(p.analogValue !== null && !p.analogDelivered)) {
           p.analogValue = resolvedAnalog;
+          // Stamp the marker only when DELIVERING a real signal. A null write
+          // (net has no source) just clears stale values; stamping it here
+          // would poison a component-driven producer whose first update() had
+          // not run yet when this pass saw it as a null IN pin.
+          if (resolvedAnalog !== null) {
+            p.analogDelivered = true;
+          }
         }
       }
     }

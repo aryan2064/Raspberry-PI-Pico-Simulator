@@ -17,6 +17,12 @@ import "./vendor/wokwi/stepper-motor-element";
 // vendor+modify the source to reflect detected motion as a dome glow (see
 // docs/DECISIONS.md). Kept out of individual views for the same jsdom reason.
 import "./vendor/wokwi/pir-motion-sensor-element";
+// Registers the vendored, modified potentiometer element (app-potentiometer) —
+// the package element owns its drag + hidden input and would fight the
+// engine-driven knob and steal canvas clicks, so we vendor+modify the source
+// (see docs/DECISIONS.md). Kept out of individual views for the same jsdom
+// reason.
+import "./vendor/wokwi/potentiometer-element";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

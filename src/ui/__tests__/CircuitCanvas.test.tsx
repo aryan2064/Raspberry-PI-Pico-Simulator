@@ -133,6 +133,8 @@ interface CanvasHandlers {
   onDisconnect: (wireId: string) => void;
   onPress: (componentId: string) => void;
   onRelease: (componentId: string) => void;
+  onKnobChange: (componentId: string, knobPosition: number) => void;
+  onDistanceChange: (componentId: string, simulatedDistanceCm: number | null) => void;
   onMoveComponent: (componentId: string, position: Vec) => void;
   onPlaceComponent: (position: Vec, kind: ComponentKind) => void;
   onDeleteComponent: (componentId: string) => void;
@@ -149,6 +151,8 @@ function renderCanvas(
     onDisconnect: handlers.onDisconnect ?? vi.fn(),
     onPress: handlers.onPress ?? vi.fn(),
     onRelease: handlers.onRelease ?? vi.fn(),
+    onKnobChange: handlers.onKnobChange ?? vi.fn(),
+    onDistanceChange: handlers.onDistanceChange ?? vi.fn(),
     onMoveComponent: handlers.onMoveComponent ?? vi.fn(),
     onPlaceComponent: handlers.onPlaceComponent ?? vi.fn(),
     onDeleteComponent: handlers.onDeleteComponent ?? vi.fn(),
@@ -162,6 +166,8 @@ function renderCanvas(
       onDisconnect={h.onDisconnect}
       onPress={h.onPress}
       onRelease={h.onRelease}
+      onKnobChange={h.onKnobChange}
+      onDistanceChange={h.onDistanceChange}
       onMoveComponent={h.onMoveComponent}
       onPlaceComponent={h.onPlaceComponent}
       onDeleteComponent={h.onDeleteComponent}
@@ -204,6 +210,8 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
         onDisconnect={vi.fn()}
         onPress={vi.fn()}
         onRelease={vi.fn()}
+        onKnobChange={vi.fn()}
+        onDistanceChange={vi.fn()}
         onMoveComponent={vi.fn()}
         onPlaceComponent={vi.fn()}
         onDeleteComponent={vi.fn()}
@@ -355,6 +363,8 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
         onDisconnect={vi.fn()}
         onPress={vi.fn()}
         onRelease={vi.fn()}
+        onKnobChange={vi.fn()}
+        onDistanceChange={vi.fn()}
         onMoveComponent={vi.fn()}
         onPlaceComponent={vi.fn()}
         onDeleteComponent={vi.fn()}
@@ -418,6 +428,197 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
     expect(onPlaceComponent).toHaveBeenCalledWith({ x: 900, y: 300 }, "pir");
   });
 
+  it("places potentiometer, resistor, and capacitor drops like any other palette part", () => {
+    const onPlaceComponent = vi.fn();
+    renderCanvas(makeSnapshot(), makeConnections(), { onPlaceComponent });
+
+    const svg = screen.getByTestId("circuit-canvas");
+    dropPaletteComponent(svg, "potentiometer", 200, 150);
+    dropPaletteComponent(svg, "resistor", 400, 250);
+    dropPaletteComponent(svg, "capacitor", 600, 350);
+
+    expect(onPlaceComponent).toHaveBeenCalledTimes(3);
+    expect(onPlaceComponent).toHaveBeenCalledWith({ x: 200, y: 150 }, "potentiometer");
+    expect(onPlaceComponent).toHaveBeenCalledWith({ x: 400, y: 250 }, "resistor");
+    expect(onPlaceComponent).toHaveBeenCalledWith({ x: 600, y: 350 }, "capacitor");
+  });
+
+  it("places an ultrasonic sensor drop like any other palette part", () => {
+    const onPlaceComponent = vi.fn();
+    renderCanvas(makeSnapshot(), makeConnections(), { onPlaceComponent });
+
+    const svg = screen.getByTestId("circuit-canvas");
+    dropPaletteComponent(svg, "ultrasonic", 700, 300);
+
+    expect(onPlaceComponent).toHaveBeenCalledTimes(1);
+    expect(onPlaceComponent).toHaveBeenCalledWith({ x: 700, y: 300 }, "ultrasonic");
+  });
+
+  it("renders resistor and capacitor bodies with their state attributes from the snapshot", () => {
+    const snapshot: SnapshotMessage = {
+      type: "snapshot",
+      conflictedPinIds: [],
+      components: [
+        {
+          id: "r1",
+          renderInfo: { type: "resistor", resistanceOhms: 10000 },
+          pins: [
+            { id: "r-p1", label: "terminal1" },
+            { id: "r-p2", label: "terminal2" },
+          ],
+        },
+        {
+          id: "c1",
+          renderInfo: { type: "capacitor", chargeFraction: 0.5, charged: true },
+          pins: [
+            { id: "c-p1", label: "a" },
+            { id: "c-p2", label: "b" },
+          ],
+        },
+      ],
+    };
+    renderCanvas(snapshot, [], {}, { r1: { x: 100, y: 100 }, c1: { x: 100, y: 200 } });
+
+    const resistor = screen.getByTestId("resistor");
+    expect(resistor.getAttribute("data-resistance-ohms")).toBe("10000");
+
+    const capacitor = screen.getByTestId("capacitor");
+    expect(capacitor.getAttribute("data-charged")).toBe("true");
+    expect(capacitor.getAttribute("data-charge-fraction")).toBe("0.500");
+
+    // Pin markers for the new parts come from their own offset maps.
+    expect(screen.getByTestId("pin-r1-terminal1")).toBeTruthy();
+    expect(screen.getByTestId("pin-r1-terminal2")).toBeTruthy();
+    expect(screen.getByTestId("pin-c1-a")).toBeTruthy();
+    expect(screen.getByTestId("pin-c1-b")).toBeTruthy();
+  });
+
+  it("relays a potentiometer knob drag as onKnobChange without moving the body", () => {
+    const snapshot: SnapshotMessage = {
+      type: "snapshot",
+      conflictedPinIds: [],
+      components: [
+        {
+          id: "pot1",
+          renderInfo: { type: "potentiometer", knobPosition: 0 },
+          pins: [
+            { id: "p-p1", label: "terminal1" },
+            { id: "p-p2", label: "wiper" },
+            { id: "p-p3", label: "terminal2" },
+          ],
+        },
+      ],
+    };
+    const onKnobChange = vi.fn();
+    const onMoveComponent = vi.fn();
+    renderCanvas(snapshot, [], { onKnobChange, onMoveComponent }, { pot1: { x: 100, y: 100 } });
+
+    const knob = screen.getByTestId("potentiometer-knob");
+    // Drag the pointer UP by 60 client px: knob travel is 120px/rev, so the
+    // position goes 0 -> 0.5.
+    fireEvent.pointerDown(knob, { button: 0, clientY: 100 });
+    fireEvent.pointerMove(knob, { clientY: 40 });
+    fireEvent.pointerUp(knob, { clientY: 40 });
+
+    expect(onKnobChange).toHaveBeenCalledWith("pot1", 0.5);
+    // The knob overlay consumed the gesture: the body must not have been
+    // dragged along with it.
+    expect(onMoveComponent).not.toHaveBeenCalled();
+  });
+
+  it("renders an ultrasonic body with its state attributes and all four pins", () => {
+    const snapshot: SnapshotMessage = {
+      type: "snapshot",
+      conflictedPinIds: [],
+      components: [
+        {
+          id: "ultra1",
+          renderInfo: { type: "ultrasonic", measuring: true, simulatedDistanceCm: 300 },
+          pins: ["vcc", "trig", "echo", "gnd"].map((label) => ({ id: `ultra1:${label}`, label })),
+        },
+      ],
+    };
+    renderCanvas(snapshot, [], {}, { ultra1: { x: 200, y: 200 } });
+
+    const ultra = screen.getByTestId("ultrasonic");
+    expect(ultra.getAttribute("data-measuring")).toBe("true");
+    expect(ultra.getAttribute("data-distance")).toBe("300");
+    // "measuring" renders the pulse indicator overlay.
+    expect(screen.getByTestId("ultrasonic-measuring")).toBeTruthy();
+
+    for (const label of ["vcc", "trig", "echo", "gnd"]) {
+      expect(screen.getByTestId(`pin-ultra1-${label}`)).toBeTruthy();
+    }
+
+    // The slider readout reflects the distance; "no object" state comes from
+    // a null simulatedDistanceCm.
+    const readout = screen.getByTestId("ultrasonic-readout");
+    expect(readout.textContent).toBe("300 cm");
+  });
+
+  it("renders the ultrasonic readout as 'no object' when the distance is null", () => {
+    const snapshot: SnapshotMessage = {
+      type: "snapshot",
+      conflictedPinIds: [],
+      components: [
+        {
+          id: "ultra1",
+          renderInfo: { type: "ultrasonic", measuring: false, simulatedDistanceCm: null },
+          pins: ["vcc", "trig", "echo", "gnd"].map((label) => ({ id: `ultra1:${label}`, label })),
+        },
+      ],
+    };
+    renderCanvas(snapshot, [], {}, { ultra1: { x: 200, y: 200 } });
+
+    const ultra = screen.getByTestId("ultrasonic");
+    expect(ultra.getAttribute("data-distance")).toBe("none");
+    expect(screen.getByTestId("ultrasonic-readout").textContent).toBe("no object");
+    expect(screen.queryByTestId("ultrasonic-measuring")).toBeNull();
+  });
+
+  it("relays an ultrasonic slider drag as onDistanceChange without moving the body", () => {
+    const snapshot: SnapshotMessage = {
+      type: "snapshot",
+      conflictedPinIds: [],
+      components: [
+        {
+          id: "ultra1",
+          renderInfo: { type: "ultrasonic", measuring: false, simulatedDistanceCm: 300 },
+          pins: ["vcc", "trig", "echo", "gnd"].map((label) => ({ id: `ultra1:${label}`, label })),
+        },
+      ],
+    };
+    const onDistanceChange = vi.fn();
+    const onMoveComponent = vi.fn();
+    renderCanvas(
+      snapshot,
+      [],
+      { onDistanceChange, onMoveComponent },
+      { ultra1: { x: 200, y: 200 } }
+    );
+
+    const slider = screen.getByTestId("ultrasonic-slider");
+    // At 300cm the tap fraction is (300-2)/398 = 0.7487. Dragging right 15
+    // client px (150 px = the full 2..400 sweep) adds 15/150 = 0.1:
+    // frac 0.8487 -> 2 + 0.8487*398 = 339.78 cm (a real distance).
+    fireEvent.pointerDown(slider, { button: 0, clientX: 0 });
+    fireEvent.pointerMove(slider, { clientX: 15 });
+    fireEvent.pointerUp(slider, { clientX: 15 });
+    expect(onDistanceChange).toHaveBeenCalledWith(
+      "ultra1",
+      expect.closeTo(2 + (0.748743718593 + 0.1) * 398, 4)
+    );
+
+    // Dragging past the far end (frac >= 1) is the "no object" stop: null.
+    fireEvent.pointerDown(slider, { button: 0, clientX: 15 });
+    fireEvent.pointerMove(slider, { clientX: 200 });
+    fireEvent.pointerUp(slider, { clientX: 200 });
+    expect(onDistanceChange).toHaveBeenLastCalledWith("ultra1", null);
+
+    // The slider overlay consumed both gestures: the body must not move.
+    expect(onMoveComponent).not.toHaveBeenCalled();
+  });
+
   it("drags an existing component body to reposition it", () => {
     const onMoveComponent = vi.fn();
     renderCanvas(makeSnapshot(), makeConnections(), { onMoveComponent });
@@ -454,6 +655,8 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
         onDisconnect={vi.fn()}
         onPress={vi.fn()}
         onRelease={vi.fn()}
+        onKnobChange={vi.fn()}
+        onDistanceChange={vi.fn()}
         onMoveComponent={vi.fn()}
         onPlaceComponent={vi.fn()}
         onDeleteComponent={vi.fn()}
@@ -643,6 +846,8 @@ describe("CircuitCanvas (snapshot renderer + input relay)", () => {
           onDisconnect={vi.fn()}
           onPress={vi.fn()}
           onRelease={vi.fn()}
+          onKnobChange={vi.fn()}
+          onDistanceChange={vi.fn()}
           onMoveComponent={vi.fn()}
           onPlaceComponent={vi.fn()}
           onDeleteComponent={vi.fn()}

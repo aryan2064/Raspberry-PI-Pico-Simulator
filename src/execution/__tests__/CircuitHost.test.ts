@@ -462,3 +462,200 @@ describe("CircuitHost PIR motion sensor: press triggers OUT HIGH on a wired GPIO
     );
   });
 });
+
+describe("CircuitHost (RC timing components)", () => {
+  let host: CircuitHost;
+
+  beforeEach(() => {
+    host = new CircuitHost();
+    host.handleEdit({ type: "addComponent", componentId: "board", kind: "pico_board" });
+  });
+
+  it("adds potentiometer, resistor, and capacitor with their pins + renderInfo", () => {
+    host.handleEdit({ type: "addComponent", componentId: "pot", kind: "potentiometer" });
+    host.handleEdit({ type: "addComponent", componentId: "r", kind: "resistor" });
+    host.handleEdit({ type: "addComponent", componentId: "c", kind: "capacitor" });
+
+    const comps = snapshot(host).components;
+    expect(comps.find((x) => x.id === "pot")!.pins.map((p) => p.label)).toEqual([
+      "terminal1", "wiper", "terminal2",
+    ]);
+    expect(comps.find((x) => x.id === "r")!.pins.map((p) => p.label)).toEqual([
+      "terminal1", "terminal2",
+    ]);
+    expect(comps.find((x) => x.id === "c")!.pins.map((p) => p.label)).toEqual(["a", "b"]);
+    expect(renderInfoById(host, "pot")).toEqual({ type: "potentiometer", knobPosition: 0 });
+    expect(renderInfoById(host, "r")).toEqual({ type: "resistor", resistanceOhms: 10000 });
+    expect(renderInfoById(host, "c")).toEqual({ type: "capacitor", chargeFraction: 0, charged: false });
+  });
+
+  it("routes a setKnobPosition message to the engine and re-snapshots", () => {
+    host.handleEdit({ type: "addComponent", componentId: "pot", kind: "potentiometer" });
+    host.handleEdit({ type: "setKnobPosition", componentId: "pot", knobPosition: 0.75 });
+    expect(renderInfoById(host, "pot")).toEqual({ type: "potentiometer", knobPosition: 0.75 });
+
+    // The wiper publishes immediately, so the shot is live even before a tick.
+    const wiper = host.componentById("pot")!.pin("wiper");
+    expect(wiper.analogValue).toBe(0.75);
+
+    // Clamping happens in the engine; a bogus target is still legal to send.
+    host.handleEdit({ type: "setKnobPosition", componentId: "pot", knobPosition: 5 });
+    expect(renderInfoById(host, "pot")).toEqual({ type: "potentiometer", knobPosition: 1 });
+
+    // Only a potentiometer has a knob.
+    expect(() =>
+      host.handleEdit({ type: "addComponent", componentId: "r", kind: "resistor" })
+    ).not.toThrow();
+    expect(() =>
+      host.handleEdit({ type: "setKnobPosition", componentId: "r", knobPosition: 0.5 })
+    ).toThrow('Component "r" is not a potentiometer');
+  });
+
+  it("runs the full RC-approach pulse end-to-end through the host bridge", () => {
+    // The demo the browser-verify script mirrors in real MicroPython:
+    //   resistor.terminal1 - cap.a - GPIO8 ; cap.b - GND
+    host.handleEdit({ type: "addComponent", componentId: "r", kind: "resistor" });
+    host.handleEdit({ type: "addComponent", componentId: "c", kind: "capacitor" });
+    connect(host, "w1", "r", "terminal1", "c", "a");
+    connect(host, "w2", "c", "a", "board", "GPIO8");
+    connect(host, "w3", "c", "b", "board", "GND");
+
+    // ---- DISCHARGE: GPIO8 as an OUT LOW driver empties the cap ----
+    // (machine.Pin(8, OUT, PULL_DOWN); p.value(0); time.sleep(...) in real code)
+    host.setupPin(8, 1, 3); // mode OUT, pull DOWN
+    host.writePin(8, 0);
+    host.tick(1 / 60);
+    expect(renderInfoById(host, "c")).toEqual({ type: "capacitor", chargeFraction: 0, charged: false });
+    expect(host.readPin(8)).toBe(0);
+
+    // ---- POLL: GPIO8 flips to IN and the cap recharges through the 10kΩ ----
+    // resistor (fraction 0.5) at maxCharge 2s -> threshold 1.0s.
+    host.setupPin(8, 0); // machine.Pin(8, IN)
+    expect(host.readPin(8)).toBe(0);
+
+    let elapsed = 0;
+    const dt = 0.05;
+    while (host.readPin(8) === 0 && elapsed < 5) {
+      host.tick(dt);
+      elapsed += dt;
+    }
+
+    // The net tripped HIGH within the expected RC window.
+    expect(host.readPin(8)).toBe(1);
+    expect(elapsed).toBeGreaterThanOrEqual(0.85);
+    expect(elapsed).toBeLessThan(1.15);
+
+    // ---- DECAY: driving GPIO8 LOW again discharges and the net returns ----
+    host.setupPin(8, 1, 3);
+    host.writePin(8, 0);
+    host.tick(1 / 60);
+    expect(host.readPin(8)).toBe(0);
+    expect(renderInfoById(host, "c")).toEqual({ type: "capacitor", chargeFraction: 0, charged: false });
+  });
+
+  it("a potentiometer's wiper fraction drives the cap's threshold proportionally", () => {
+    host.handleEdit({ type: "addComponent", componentId: "pot", kind: "potentiometer" });
+    host.handleEdit({ type: "addComponent", componentId: "c", kind: "capacitor" });
+    connect(host, "w1", "pot", "wiper", "c", "a");
+    connect(host, "w2", "c", "a", "board", "GPIO8");
+    connect(host, "w3", "c", "b", "board", "GND");
+
+    // knob at 0.25 -> threshold = 2s * 0.25 = 0.5s.
+    host.handleEdit({ type: "setKnobPosition", componentId: "pot", knobPosition: 0.25 });
+    host.setupPin(8, 0); // poll phase; nothing drives, cap starts from 0
+
+    let elapsed = 0;
+    const dt = 0.05;
+    while (host.readPin(8) === 0 && elapsed < 5) {
+      host.tick(dt);
+      elapsed += dt;
+    }
+    expect(host.readPin(8)).toBe(1);
+    expect(elapsed).toBeGreaterThanOrEqual(0.4);
+    expect(elapsed).toBeLessThan(0.65);
+  });
+
+  it("is replay-safe and keeps the new kinds limited to palettable components", () => {
+    host.handleEdit({ type: "addComponent", componentId: "c", kind: "capacitor" });
+    const before = snapshot(host).components.length;
+    host.handleEdit({ type: "addComponent", componentId: "c", kind: "capacitor" });
+    expect(snapshot(host).components.length).toBe(before);
+  });
+});
+
+describe("CircuitHost ultrasonic HC-SR04: TRIG rise drives ECHO for 58µs/cm on a wired GPIO", () => {
+  let host: CircuitHost;
+
+  beforeEach(() => {
+    host = new CircuitHost();
+    addDemoBoard(host);
+    host.handleEdit({ type: "addComponent", componentId: "sensor", kind: "ultrasonic" });
+    connect(host, "w1", "board", "GPIO9", "sensor", "trig");
+    connect(host, "w2", "sensor", "echo", "board", "GPIO10");
+    host.setupPin(9, 1); // GPIO9 as OUT, driving TRIG (the Python writer)
+    host.setupPin(10, 0); // GPIO10 as IN, reading ECHO (the Python listener)
+  });
+
+  type UltraInfo = {
+    type: "ultrasonic";
+    measuring: boolean;
+    simulatedDistanceCm: number | null;
+  };
+
+  function ultraInfo(): UltraInfo {
+    return renderInfoById(host, "sensor") as UltraInfo;
+  }
+
+  it("exposes vcc/trig/echo/gnd in the snapshot and idles with no echo", () => {
+    const pins = snapshot(host)
+      .components.find((c) => c.id === "sensor")!
+      .pins.map((p) => p.label);
+    expect(pins).toEqual(["vcc", "trig", "echo", "gnd"]);
+    expect(ultraInfo()).toEqual({ type: "ultrasonic", measuring: false, simulatedDistanceCm: null });
+    expect(host.readPin(10)).toBe(0); // idle ECHO drives the GPIO LOW
+  });
+
+  it("routes a setSimulatedDistance message to the engine and the ECHO pulse is measurable", () => {
+    host.handleEdit({ type: "setSimulatedDistance", componentId: "sensor", simulatedDistanceCm: 300 });
+    expect(ultraInfo()).toEqual({ type: "ultrasonic", measuring: false, simulatedDistanceCm: 300 });
+
+    // TRIG rise: writing GPIO9 HIGH then ticking (finely) detects the edge and
+    // starts the echo mid-tick — ECHO is HIGH from the very first µs.
+    host.writePin(9, 1);
+    host.tick(1e-6);
+    expect(ultraInfo().measuring).toBe(true);
+    expect(host.readPin(10)).toBe(1);
+
+    // Step in 1µs dt until ECHO drops: 300cm * 58µs/cm = 17.4ms.
+    let elapsedUs = 1;
+    while (host.readPin(10) === 1 && elapsedUs < 30000) {
+      host.tick(1e-6);
+      elapsedUs += 1;
+    }
+    expect(host.readPin(10)).toBe(0);
+    expect(elapsedUs).toBeGreaterThan(17400 - 5);
+    expect(elapsedUs).toBeLessThan(17400 + 5);
+    expect(ultraInfo().measuring).toBe(false);
+  });
+
+  it("null distance (no object) produces no echo despite a TRIG rise", () => {
+    host.handleEdit({ type: "setSimulatedDistance", componentId: "sensor", simulatedDistanceCm: null });
+    host.writePin(9, 1);
+    host.tick(1e-6);
+    expect(ultraInfo().measuring).toBe(false);
+    expect(host.readPin(10)).toBe(0);
+  });
+
+  it("rejects setSimulatedDistance on a non-ultrasonic component", () => {
+    host.handleEdit({ type: "addComponent", componentId: "led2", kind: "led" });
+    expect(() =>
+      host.handleEdit({ type: "setSimulatedDistance", componentId: "led", simulatedDistanceCm: 10 })
+    ).toThrow('Component "led" is not an ultrasonic sensor');
+  });
+
+  it("advances the shared sim clock per tick() and exposes it in µs", () => {
+    host.tick(0.25);
+    host.tick(0.25);
+    expect(host.getSimTimeMicros()).toBe(500_000);
+  });
+});

@@ -11,4 +11,8 @@ export type RenderInfo =
   | { type: "transistor"; conducting: boolean }
   | { type: "stepper"; angleDegrees: number; direction: "CW" | "CCW" | "none"; stepsPerSecond: number }
   | { type: "pir"; motionActive: boolean }
+  | { type: "potentiometer"; knobPosition: number }
+  | { type: "resistor"; resistanceOhms: number }
+  | { type: "capacitor"; chargeFraction: number; charged: boolean }
+  | { type: "ultrasonic"; measuring: boolean; simulatedDistanceCm: number | null }
   | { type: "pico_board" };

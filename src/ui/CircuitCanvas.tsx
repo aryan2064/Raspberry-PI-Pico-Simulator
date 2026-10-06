@@ -10,6 +10,10 @@ import { RelayView, relayPinOffsets } from "./components/RelayView";
 import { TransistorView, transistorPinOffsets } from "./components/TransistorView";
 import { StepperView, stepperPinOffsets } from "./components/StepperMotorView";
 import { PIRSensorView, pirPinOffsets } from "./components/PIRSensorView";
+import { PotentiometerView, potPinOffsets } from "./components/PotentiometerView";
+import { ResistorView, resistorPinOffsets } from "./components/ResistorView";
+import { CapacitorView, capacitorPinOffsets } from "./components/CapacitorView";
+import { UltrasonicSensorView, ultrasonicPinOffsets } from "./components/UltrasonicSensorView";
 import {
   PicoBoardView,
   picoPinOffsets,
@@ -26,6 +30,10 @@ const PIN_OFFSETS: Record<RenderInfo["type"], PinOffsetMap> = {
   transistor: transistorPinOffsets,
   stepper: stepperPinOffsets,
   pir: pirPinOffsets,
+  potentiometer: potPinOffsets,
+  resistor: resistorPinOffsets,
+  capacitor: capacitorPinOffsets,
+  ultrasonic: ultrasonicPinOffsets,
   pico_board: picoPinOffsets,
 };
 
@@ -36,6 +44,10 @@ const PIN_STYLE: Record<RenderInfo["type"], PinMarkerStyle> = {
   transistor: { r: 5, fill: "#888", stroke: "#555" },
   stepper: { r: 5, fill: "#888", stroke: "#555" },
   pir: { r: 5, fill: "#888", stroke: "#555" },
+  potentiometer: { r: 5, fill: "#888", stroke: "#555" },
+  resistor: { r: 5, fill: "#888", stroke: "#555" },
+  capacitor: { r: 5, fill: "#888", stroke: "#555" },
+  ultrasonic: { r: 5, fill: "#888", stroke: "#555" },
   pico_board: { r: 4, fill: "#d8b03c", stroke: "#4a3a0a" },
 };
 
@@ -101,6 +113,8 @@ function renderComponentView(
   renderInfo: RenderInfo,
   onPress: (componentId: string) => void,
   onRelease: (componentId: string) => void,
+  onKnobChange: (componentId: string, knobPosition: number) => void,
+  onDistanceChange: (componentId: string, simulatedDistanceCm: number | null) => void,
   selected: boolean
 ): ReactNode {
   switch (renderInfo.type) {
@@ -129,6 +143,30 @@ function renderComponentView(
           renderInfo={renderInfo}
           selected={selected}
           onTrigger={() => onPress(componentId)}
+        />
+      );
+    case "potentiometer":
+      return (
+        <PotentiometerView
+          key={componentId}
+          renderInfo={renderInfo}
+          selected={selected}
+          onKnobChange={(knobPosition) => onKnobChange(componentId, knobPosition)}
+        />
+      );
+    case "resistor":
+      return <ResistorView key={componentId} renderInfo={renderInfo} selected={selected} />;
+    case "capacitor":
+      return <CapacitorView key={componentId} renderInfo={renderInfo} selected={selected} />;
+    case "ultrasonic":
+      return (
+        <UltrasonicSensorView
+          key={componentId}
+          renderInfo={renderInfo}
+          selected={selected}
+          onDistanceChange={(simulatedDistanceCm) =>
+            onDistanceChange(componentId, simulatedDistanceCm)
+          }
         />
       );
     case "pico_board":
@@ -162,6 +200,13 @@ interface CircuitCanvasProps {
   onDisconnect: (wireId: string) => void;
   onPress: (componentId: string) => void;
   onRelease: (componentId: string) => void;
+  // A potentiometer knob was turned on the canvas. The engine Potentiometer is
+  // in the worker, so the view never mutates local state — this relays the new
+  // 0..1 position up to App, which posts a setKnobPosition message.
+  onKnobChange: (componentId: string, knobPosition: number) => void;
+  // An ultrasonic distance slider was dragged on the canvas. Same relay shape
+  // as onKnobChange: App posts a setSimulatedDistance message to the worker.
+  onDistanceChange: (componentId: string, simulatedDistanceCm: number | null) => void;
   onMoveComponent: (componentId: string, position: Vec) => void;
   onPlaceComponent: (position: Vec, kind: ComponentKind) => void;
   // Called when the user deletes a selected component. The canvas only tracks
@@ -178,6 +223,8 @@ export function CircuitCanvas({
   onDisconnect,
   onPress,
   onRelease,
+  onKnobChange,
+  onDistanceChange,
   onMoveComponent,
   onPlaceComponent,
   onDeleteComponent,
@@ -379,6 +426,10 @@ export function CircuitCanvas({
       case "transistor":
       case "stepper":
       case "pir":
+      case "potentiometer":
+      case "resistor":
+      case "capacitor":
+      case "ultrasonic":
         break;
       default:
         return; // e.g. non-palette payloads must not be placed
@@ -501,6 +552,8 @@ export function CircuitCanvas({
               c.renderInfo,
               onPress,
               onRelease,
+              onKnobChange,
+              onDistanceChange,
               selectedComponentId === c.id
             )}
           </div>

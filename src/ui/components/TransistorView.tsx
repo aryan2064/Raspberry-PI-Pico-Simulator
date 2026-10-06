@@ -1,68 +1,80 @@
-import type { PinOffsetMap } from "../types";
+import type { PinOffsetMap, Vec } from "../types";
+import transistorArtUrl from "../assets/transistor-to92-npn.svg";
 
-// Hand-drawn NPN transistor in TO-92-ish outline: body with three axial leads
-// hanging from the bottom. Lead order follows the common BC547 flat-side
-// reading (left -> right: collector, base, emitter) — documented in
-// docs/DECISIONS.md so the *visual* center lead is the control input. Pin
-// offsets sit at the lead ends where the socket tin would receive them.
+// Real Fritzing artwork (fritzing/fritzing-parts, CC BY-SA 3.0): the
+// breadboard view referenced by core/transistor_signal_NPN_TO92_CBE.fzp
+// ("NPN-Transistor", TO92 [THT]), shipped as a static asset — the same approach
+// as the Pico board. This replaces the hand-drawn TO-92-ish outline. Source
+// URL, license and the deferred-attribution TODO live in the asset's own header
+// comment and in docs/DECISIONS.md.
+//
+// PACKAGE CHOICE: a genuine generic TO-92 through-hole part was found in
+// core/, so the SOT-23 surface-mount fallback was NOT needed. It is also the
+// better visual match because its left-to-right lead order already equals our
+// BC547-style reading, so the pin labels are unchanged.
 export const TRANSISTOR_W = 80;
-export const TRANSISTOR_H = 40;
-export const transistorPinOffsets: PinOffsetMap = {
-  base: { x: 40, y: 40 },
-  collector: { x: 25, y: 40 },
-  emitter: { x: 55, y: 40 },
+// The part's own viewBox is "0 0 16.527 24.081" (0.22954in x 0.33446in), so
+// scaling to the previous 80-wide body yields a taller, correctly-proportioned
+// 116.566-high part: a TO-92 with its leads is taller than it is wide. The
+// aspect ratio is preserved exactly, so the artwork is never distorted.
+const TRANSISTOR_VIEWBOX = { x: 0, y: 0, w: 16.527, h: 24.081 };
+const TRANSISTOR_SCALE = TRANSISTOR_W / TRANSISTOR_VIEWBOX.w;
+export const TRANSISTOR_H = +(TRANSISTOR_VIEWBOX.h * TRANSISTOR_SCALE).toFixed(3);
+
+// Engine label -> [x, y, width, height] of that pin's connector rect, copied
+// verbatim from the asset's own connection markup. The .fzp's breadboard
+// mapping is the legacy-scrambled kind (connector0 "E" points at connector2pin),
+// so the identity of each lead is resolved from the part's real left-to-right
+// geometry instead:
+//   left  lead = collector, centre lead = base, right lead = emitter
+// which is exactly the order the engine already used, so no label moved.
+const TRANSISTOR_CONNECTOR_RECTS: Record<string, [number, number, number, number]> = {
+  collector: [0, 22.081, 2.16, 1], // connector0pin — left lead
+  base: [7.181, 22.081, 2.16, 1], // connector1pin — centre lead
+  emitter: [14.367, 22.081, 2.16, 1], // connector2pin — right lead
 };
+
+function buildTransistorPinOffsets(): PinOffsetMap {
+  const offsets: PinOffsetMap = {};
+  for (const [label, [x, y, w, h]] of Object.entries(TRANSISTOR_CONNECTOR_RECTS)) {
+    const center: Vec = { x: x + w / 2, y: y + h / 2 };
+    offsets[label] = {
+      x: +((center.x - TRANSISTOR_VIEWBOX.x) * TRANSISTOR_SCALE).toFixed(3),
+      y: +((center.y - TRANSISTOR_VIEWBOX.y) * TRANSISTOR_SCALE).toFixed(3),
+    };
+  }
+  return offsets;
+}
+
+// collector x = 5.228, base x = 39.988, emitter x = 74.772; all at y = 109.305.
+export const transistorPinOffsets: PinOffsetMap = buildTransistorPinOffsets();
 
 interface TransistorArtProps {
   conducting: boolean;
 }
 
-// Pure SVG body art, exported for reuse by the palette preview. `conducting`
-// tints the epoxy body — the leads themselves never animate.
-export function TransistorArt({ conducting }: TransistorArtProps) {
+// Component body art: the vendored Fritzing transistor part alone, drawn at the
+// part's own viewBox so the pin markers land exactly on its lead tabs. The
+// upstream part is static artwork, so `conducting` is not painted here; the
+// worker stays the single source of truth and TransistorView mirrors it as
+// data-conducting. Exported for the palette preview.
+export function TransistorArt(_props: TransistorArtProps) {
   return (
     <svg
       width={TRANSISTOR_W}
       height={TRANSISTOR_H}
-      viewBox={`0 0 ${TRANSISTOR_W} ${TRANSISTOR_H}`}
+      viewBox={`${TRANSISTOR_VIEWBOX.x} ${TRANSISTOR_VIEWBOX.y} ${TRANSISTOR_VIEWBOX.w} ${TRANSISTOR_VIEWBOX.h}`}
       xmlns="http://www.w3.org/2000/svg"
     >
-      {/* three leads (collector / base / emitter) */}
-      {[25, 40, 55].map((x) => (
-        <rect key={x} x={x - 1.6} y={22} width={3.2} height={TRANSISTOR_H - 22} rx={1} fill="#b9b9b9" />
-      ))}
-      {/* epoxy body */}
-      <rect
-        x={10}
-        y={0}
-        width={60}
-        height={22}
-        rx={5}
-        fill={conducting ? "#f4c88a" : "#e7e2d6"}
-        stroke="#b3a688"
+      <image
+        href={transistorArtUrl}
+        x={TRANSISTOR_VIEWBOX.x}
+        y={TRANSISTOR_VIEWBOX.y}
+        width={TRANSISTOR_VIEWBOX.w}
+        height={TRANSISTOR_VIEWBOX.h}
+        preserveAspectRatio="none"
+        style={{ pointerEvents: "none" }}
       />
-      {/* part label */}
-      <text
-        x={40}
-        y={15}
-        textAnchor="middle"
-        fontSize={12}
-        fontWeight={700}
-        fill={conducting ? "#6b4a1f" : "#4a4235"}
-        style={{ fontFamily: "inherit" }}
-      >
-        NPN
-      </text>
-      {/* terminal labels, bottom just under the lead ends */}
-      <text x={25} y={38.5} textAnchor="middle" fontSize={5.5} fill="#6b6455">
-        collector
-      </text>
-      <text x={40} y={38.5} textAnchor="middle" fontSize={5.5} fill="#6b6455">
-        base
-      </text>
-      <text x={55} y={38.5} textAnchor="middle" fontSize={5.5} fill="#6b6455">
-        emitter
-      </text>
     </svg>
   );
 }
@@ -73,9 +85,8 @@ interface TransistorViewProps {
   selected?: boolean;
 }
 
-// Static hand-drawn view — no interactive terminals. The worker is the single
-// source of truth for `conducting`; the view mirrors it as a data attribute
-// plus body tint.
+// Static view — no interactive terminals. The worker is the single source of
+// truth for `conducting`; the view mirrors it as a data attribute.
 export function TransistorView({ renderInfo, selected }: TransistorViewProps) {
   const { conducting } = renderInfo;
   return (

@@ -19,6 +19,11 @@
 //   8. Non-blocking sleep (JSPI): during a time.sleep() blink script the button
 //      relay still lights LED1 promptly (worker event loop free mid-sleep) and
 //      the script still completes.
+//   9. Relay + Transistor: drop both -> every pin marker is re-derived from the
+//      SERVED Fritzing asset's own <rect id="connectorNpin"> tabs (mapped through
+//      that file's viewBox) and asserted sub-pixel, since these two are static
+//      SVG assets with no element pinInfo to diff against -> then the switching
+//      demo: in HIGH closes com/no, base HIGH conducts collector->emitter.
 //  10. StepperMotor: a script drives GPIO4..7 (in1..in4) 8 half-step cycles
 //      forward then 8 back (single-bit writes), lands on the exact expected
 //      angle/direction, the vendored app-stepper-motor's shadow-DOM arrow
@@ -27,6 +32,10 @@
 //  11. No custom-element registration collision: after a reload armed with an
 //      error capture, both the package's wokwi-stepper-motor and the vendored
 //      app-stepper-motor register and no customElements.define error is thrown.
+//  14. UltrasonicSensor: drop -> sub-pixel pins vs the published wokwi-hc-sr04's
+//      own pinInfo -> wire vcc/trig/echo/gnd -> slider drags relay 300cm and
+//      360cm distance stimuli that REAL Python times to exactly distance*58us
+//      via the micros()/tickUs bridge -> the "no object" stop produces NO echo.
 import { spawn } from "node:child_process";
 import { rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -67,6 +76,277 @@ const EXPECTED_PIR_OFFSETS = {
   out: { x: 45.9175, y: 92 },
   gnd: { x: 55.6415, y: 92 },
 };
+
+// Potentiometer pin anchors: mirror of PotentiometerView's potPinOffsets,
+// straight from the vendored app-potentiometer's own pinInfo — leads on the
+// bottom face at y=68.5, GND(left; engine terminal1) / SIG(center; wiper) /
+// VCC(right; terminal2). Compared against the element's live pinInfo + the
+// canvas markers in step 13.
+const EXPECTED_POT_OFFSETS = {
+  terminal1: { x: 29, y: 68.5 },
+  wiper: { x: 39, y: 68.5 },
+  terminal2: { x: 49, y: 68.5 },
+};
+
+// Resistor pin anchors: mirror of ResistorView's resistorPinOffsets. The
+// published wokwi-resistor names its leads '1'/'2' (terminal1 left, terminal2
+// right) — same coordinates we mirror, so the live pinInfo '1'/'2' must equal
+// terminal1/terminal2.
+const EXPECTED_RES_OFFSETS = {
+  terminal1: { x: 0, y: 5.65 },
+  terminal2: { x: 58.8, y: 5.65 },
+};
+
+// Capacitor pin anchors: mirror of CapacitorView's capacitorPinOffsets. The
+// capacitor is hand-drawn (no element pinInfo to diff against), so these come
+// from the art's own geometry: `a` is the left leg at the can's bottom edge,
+// `b` the right (ground) leg, both on the y=64 lead line.
+const EXPECTED_CAP_OFFSETS = {
+  a: { x: 14, y: 64 },
+  b: { x: 34, y: 64 },
+};
+
+// Ultrasonic pin anchors: mirror of UltrasonicSensorView's ultrasonicPinOffsets,
+// straight from the published wokwi-hc-sr04's own pinInfo — the four header
+// pins VCC-TRIG-ECHO-GND along the bottom face at y=94.5 on the 170.1x94.5 art.
+const EXPECTED_ULTRA_OFFSETS = {
+  vcc: { x: 71.3, y: 94.5 },
+  trig: { x: 81.3, y: 94.5 },
+  echo: { x: 91.3, y: 94.5 },
+  gnd: { x: 101.3, y: 94.5 },
+};
+
+// Relay pin anchors: mirror of RelayView's relayPinOffsets, derived from the
+// shipped DFRobot 3V Relay Module (DFR0473) drawing — an external art with NO
+// connectorNpin markup, so the offsets are area-weighted pixel centroids of the
+// module's own drawn connection metal, measured by probing the served asset
+// (scripts/probe-dfrobot-centroids.mjs; method recorded in docs/DECISIONS.md):
+//   - the 3 header pads of the "Gravity 3P Interface" (right) -> in, vcc, gnd
+//   - the 4 screw eyes of the wiring terminal block (left) -> com, no, nc (N/A
+//     is literally silk-screened "N/A" and has no engine pin)
+//   - asset viewBox "211 566 124 106.5" cropped to the board, scaled to the
+//     140-wide body (RELAY_SCALE = 140/124).
+// verifyRelayPinsOnMetal below re-derives every anchor from the SERVED asset's
+// own pixels with the same centroid procedure the measuring probe used, so the
+// offset table is proven against the art itself — exactly the guarantee the old
+// connectorNpin rects used to give.
+const RELAY_SCALE = 140 / 124;
+const RELAY_ANCHORS = {
+  in: { x: 306.63, y: 626.688 }, // D header pad
+  vcc: { x: 306.923, y: 618.791 }, // + header pad
+  gnd: { x: 307.322, y: 611.203 }, // - header pad
+  com: { x: 222.751, y: 636.986 }, // COM screw eye
+  no: { x: 222.793, y: 615.392 }, // NO screw eye
+  nc: { x: 222.768, y: 604.423 }, // NC screw eye
+};
+const RELAY_VB = { x: 211, y: 566, w: 124, h: 106.5 };
+const EXPECTED_RELAY_OFFSETS = Object.fromEntries(
+  Object.entries(RELAY_ANCHORS).map(([label, a]) => [
+    label,
+    { x: +((a.x - RELAY_VB.x) * RELAY_SCALE).toFixed(3), y: +((a.y - RELAY_VB.y) * RELAY_SCALE).toFixed(3) },
+  ])
+);
+const RELAY_ASSET = { file: "dfrobot-3v-relay-module.svg", width: 140, height: 106.5 * RELAY_SCALE };
+
+// Transistor pin anchors: mirror of TransistorView's transistorPinOffsets,
+// derived from the shipped Fritzing TO-92 part's own connection markup in
+// src/ui/assets/transistor-to92-npn.svg (viewBox "0 0 16.527 24.081", scaled to
+// the 80-wide body). All three leads share y=109.305; left-to-right is
+// collector / base / emitter, the BC547 reading the engine already used.
+const EXPECTED_TRANSISTOR_OFFSETS = {
+  collector: { x: 5.228, y: 109.305 },
+  base: { x: 39.988, y: 109.305 },
+  emitter: { x: 74.772, y: 109.305 },
+};
+const TRANSISTOR_CONNECTOR_IDS = {
+  collector: "connector0pin",
+  base: "connector1pin",
+  emitter: "connector2pin",
+};
+const TRANSISTOR_ASSET = { file: "transistor-to92-npn.svg", width: 80, height: 116.566 };
+
+// Sub-pixel pin alignment for the two static-asset components. Relay and
+// Transistor have no custom element and therefore no live `pinInfo`, so instead
+// of diffing against a mirror we read the part's OWN connector markup out of
+// the asset file the page actually serves, compute where each tab centre must
+// land, and require the canvas marker to be there. That catches a stale asset,
+// a wrong viewBox scale, and an eyeballed offset in one assertion. `evaljs` is
+// passed in because it is scoped to the CDP client block.
+async function verifyAssetPinAlignment(name, placedId, expected, connectorIds, asset, evaljs) {
+  const labels = Object.keys(expected);
+  const probe = await evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const sr = stage.getBoundingClientRect();
+    const scale = sr.width / 1200;
+    const body = document.querySelector('[data-testid="body-placed-${placedId}"]');
+    const br = body.getBoundingClientRect();
+    const img = body.querySelector('image');
+    const pins = {};
+    for (const label of ${JSON.stringify(labels)}) {
+      const c = document.querySelector('[data-testid="pin-placed-${placedId}-' + label + '"] circle');
+      if (!c) { pins[label] = null; continue; }
+      const m = c.getBoundingClientRect();
+      pins[label] = {
+        x: (m.left + m.width / 2 - br.left) / scale,
+        y: (m.top + m.height / 2 - br.top) / scale,
+      };
+    }
+    return {
+      href: img?.getAttribute('href') ?? null,
+      imgW: Number(img?.getAttribute('width')),
+      imgH: Number(img?.getAttribute('height')),
+      pins,
+    };
+  })()`);
+
+  assert(probe.href && probe.href.includes(asset.file), `${name} body must render ${asset.file}, got ${probe.href}`);
+  const assetText = await (await fetch(new URL(probe.href, BASE))).text();
+  const vb = /viewBox="([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"/.exec(assetText);
+  assert(!!vb, `${name} asset must carry a viewBox`);
+  const vbX = Number(vb[1]);
+  const vbY = Number(vb[2]);
+  const vbW = Number(vb[3]);
+  const vbH = Number(vb[4]);
+  assert(
+    Math.abs(probe.imgW - vbW) < 1e-9 && Math.abs(probe.imgH - vbH) < 1e-9,
+    `${name} <image> must span the asset viewBox ${vbW}x${vbH}, got ${probe.imgW}x${probe.imgH}`
+  );
+
+  const rects = {};
+  for (const m of assetText.matchAll(/<rect id="(connector\d+pin)"[^>]*>/g)) {
+    const tag = m[0];
+    const num = (n) => Number(new RegExp(`${n}="([-\\d.]+)"`).exec(tag)[1]);
+    rects[m[1]] = { x: num("x"), y: num("y"), w: num("width"), h: num("height") };
+  }
+
+  const scale = asset.width / vbW;
+  const aligns = [];
+  for (const label of labels) {
+    const rect = rects[connectorIds[label]];
+    assert(!!rect, `${name} asset must define ${connectorIds[label]} for label ${label}`);
+    const fromAsset = {
+      x: +(((rect.x + rect.w / 2 - vbX) * scale).toFixed(3)),
+      y: +(((rect.y + rect.h / 2 - vbY) * scale).toFixed(3)),
+    };
+    const mirrored = expected[label];
+    assert(
+      Math.abs(fromAsset.x - mirrored.x) < 0.01 && Math.abs(fromAsset.y - mirrored.y) < 0.01,
+      `${name} ${label} offset table must match the asset's own tab centre, want ${JSON.stringify(
+        mirrored
+      )} got ${JSON.stringify(fromAsset)}`
+    );
+    const got = probe.pins[label];
+    assert(!!got, `${name} must render a ${label} pin marker`);
+    aligns.push({ label, ...fromAsset, got, dx: got.x - fromAsset.x, dy: got.y - fromAsset.y });
+  }
+  console.log(`${name} asset pin geometry:`, JSON.stringify({ asset, aligns }));
+  for (const a of aligns) {
+    assert(
+      Math.abs(a.dx) < 1 && Math.abs(a.dy) < 1,
+      `${name} pin ${a.label} must align sub-pixel on its own connector tab (${a.x}, ${a.y}), got dx=${a.dx.toFixed(
+        3
+      )} dy=${a.dy.toFixed(3)}`
+    );
+  }
+}
+
+// Relay-specific alignment: the DFRobot module art has no connectorNpin markup,
+// so instead of reading rects we prove each anchor against the SERVED asset's
+// own pixels, rasterized exactly the way RelayView draws it (the image fills the
+// board-cropping viewBox "211 566 124 106.5"). Around every anchor we sample a
+// 3x3 window (0.25 user-unit steps) and require most pixels to be DRAWN MODULE
+// ART — pad/screw metal, pin hole, or body — not the white page, the green PCB,
+// or the pale cream silkscreen background. Then the DOM marker must land
+// sub-pixel on the probe-measured anchor. `evaljs` is scoped to the CDP client
+// block.
+async function verifyRelayPinsOnMetal(placedId, expected, anchors, vb, scale, evaljs) {
+  const labels = Object.keys(expected);
+  const anchorSrc = JSON.stringify(anchors);
+  const res = await evaljs(`(async()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const sr = stage.getBoundingClientRect();
+    const scalePx = sr.width / 1200;
+    const body = document.querySelector('[data-testid="body-placed-${placedId}"]');
+    const br = body.getBoundingClientRect();
+    const img = body.querySelector('image');
+    const href = img?.getAttribute('href') ?? null;
+    const vbRect = { x: ${vb.x}, y: ${vb.y}, w: ${vb.w}, h: ${vb.h} };
+    const S = 8; // fine sampling so a 0.25-unit window is a clean 3x3
+    const c = document.createElement('canvas');
+    c.width = Math.round(vbRect.w * S); c.height = Math.round(vbRect.h * S);
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    const im = new Image();
+    let ok = false;
+    try { await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = href; }); ok = true; } catch {}
+    if (!ok) return { href, rasterized: false };
+    g.drawImage(im, 0, 0, c.width, c.height);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    const at = (ux, uy) => {
+      const i = (Math.round((uy - vbRect.y) * S) * c.width + Math.round((ux - vbRect.x) * S)) * 4;
+      return [d[i], d[i + 1], d[i + 2]];
+    };
+    // Background = white page / pale cream silkscreen / green PCB. Anything else
+    // (flat-grey pad, dark screw, copper eye, pin hole, body) is drawn art.
+    // The module's pads are flat neutral grey (~236,236,236) and must NOT be
+    // mistaken for the bright page/cream, which carry red>blue spread.
+    const isBackground = (r, gg, b) =>
+      (r >= 250 && gg >= 250 && b >= 250) || // white page
+      (r >= 245 && gg >= 235 && b >= 180 && r - b >= 30) || // cream silkscreen
+      (gg >= 120 && gg >= r + 25 && gg >= b + 25); // PCB green
+    const art = {};
+    for (const [label, a] of Object.entries(${anchorSrc})) {
+      let drawn = 0, hits = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const [r, gg, b] = at(a.x + dx * 0.25, a.y + dy * 0.25);
+          hits++; if (!isBackground(r, gg, b)) drawn++;
+        }
+      }
+      art[label] = { center: at(a.x, a.y), drawn };
+    }
+    const pins = {};
+    for (const label of ${JSON.stringify(labels)}) {
+      const el = document.querySelector('[data-testid="pin-placed-${placedId}-' + label + '"] circle');
+      const m = el?.getBoundingClientRect();
+      pins[label] = el && m ? { x: (m.left + m.width / 2 - br.left) / scalePx, y: (m.top + m.height / 2 - br.top) / scalePx } : null;
+    }
+    const imgW = Number(img?.getAttribute('width'));
+    const imgH = Number(img?.getAttribute('height'));
+    return { href, rasterized: ok, art, pins, imgW, imgH };
+  })()`);
+
+  assert(res.href && res.href.includes("dfrobot-3v-relay-module.svg"), `relay body must render the DFRobot module, got ${res.href}`);
+  assert(res.rasterized, "relay asset must rasterize from the served href");
+  assert(Math.abs(res.imgW - vb.w) < 1e-9 && Math.abs(res.imgH - vb.h) < 1e-9,
+    `relay <image> must span the asset viewBox ${vb.w}x${vb.h}, got ${res.imgW}x${res.imgH}`);
+  const aligns = [];
+  for (const label of labels) {
+    const art = res.art[label];
+    assert(art.drawn >= 7,
+      `relay anchor ${label} must sit on drawn module art in the served asset's own pixels, got ${art.drawn}/9 (center rgb(${art.center}))`);
+    const expectedPx = {
+      x: +((anchors[label].x - vb.x) * scale).toFixed(3),
+      y: +((anchors[label].y - vb.y) * scale).toFixed(3),
+    };
+    const mirrored = expected[label];
+    assert(
+      Math.abs(expectedPx.x - mirrored.x) < 0.01 && Math.abs(expectedPx.y - mirrored.y) < 0.01,
+      `relay ${label} offset table must match the measured anchor, want ${JSON.stringify(mirrored)} got ${JSON.stringify(expectedPx)}`
+    );
+    const marker = res.pins[label];
+    assert(!!marker, `relay must render a ${label} pin marker`);
+    aligns.push({ label, ...expectedPx, got: marker, dx: marker.x - expectedPx.x, dy: marker.y - expectedPx.y, art: art.drawn });
+  }
+  console.log("relay asset pin geometry (pixel-proven on the served asset's own drawn art):",
+    JSON.stringify({ asset: RELAY_ASSET, aligns }));
+  for (const a of aligns) {
+    assert(
+      Math.abs(a.dx) < 1 && Math.abs(a.dy) < 1,
+      `relay pin ${a.label} must align sub-pixel on its drawn pad/screw (${a.x}, ${a.y}), got dx=${a.dx.toFixed(3)} dy=${a.dy.toFixed(3)}`
+    );
+  }
+}
 
 const profile = join(process.env.TEMP ?? ".", "opencode", `edge-cdp-${Date.now()}`);
 mkdirSync(profile, { recursive: true });
@@ -167,6 +447,12 @@ const state = () =>
         stepperDirection: q('[data-testid="stepper-body"]')?.getAttribute('data-direction') ?? null,
         stepperStepsPerSecond: q('[data-testid="stepper-body"]')?.getAttribute('data-steps-per-second') ?? null,
         pirMotion: q('[data-testid="pir-body"]')?.getAttribute('data-motion-active') ?? null,
+        potKnob: q('[data-testid="potentiometer"]')?.getAttribute('data-knob-position') ?? null,
+        resistorOhms: q('[data-testid="resistor"]')?.getAttribute('data-resistance-ohms') ?? null,
+        capCharged: q('[data-testid="capacitor"]')?.getAttribute('data-charged') ?? null,
+        placedUltrasonic: posOf('body-placed-5'),
+        ultrasonicReadout: q('[data-testid="ultrasonic-readout"]')?.textContent ?? null,
+        ultrasonicDistance: q('[data-testid="ultrasonic"]')?.getAttribute('data-distance') ?? null,
         stepperRotate: (() => {
           const el = q('[data-testid="stepper-body"] app-stepper-motor');
           const p = el?.shadowRoot?.querySelector('#arrow-path');
@@ -434,8 +720,12 @@ const state = () =>
       s.paletteItems.includes("palette-relay") &&
       s.paletteItems.includes("palette-transistor") &&
       s.paletteItems.includes("palette-stepper") &&
-      s.paletteItems.includes("palette-pir"),
-    "palette should list LED, Button, Relay, Transistor, Stepper, and PIR, got " + s.paletteItems
+      s.paletteItems.includes("palette-pir") &&
+      s.paletteItems.includes("palette-potentiometer") &&
+      s.paletteItems.includes("palette-resistor") &&
+      s.paletteItems.includes("palette-capacitor") &&
+      s.paletteItems.includes("palette-ultrasonic"),
+    "palette should list LED, Button, Relay, Transistor, Stepper, PIR, Potentiometer, Resistor, Capacitor, and Ultrasonic, got " + s.paletteItems
   );
   assert(
     !s.paletteItems.includes("palette-pico_board"),
@@ -790,6 +1080,21 @@ const state = () =>
   await dropKindAt('transistor', 450, 300);
   s = await waitFor("dropped Transistor should render as placed-5", (x) => x.placedTransistor !== null);
   assert(s.transistorConducting === "false", "transistor should start cut off, got " + s.transistorConducting);
+
+  // Sub-pixel pin alignment for both, read from the shipped artwork. The relay
+  // is the DFRobot 3V module (no connectorNpin markup) so its anchors are the
+  // module's own measured pad/screw centroids, proven against the served
+  // asset's pixels; the transistor still carries Fritzing connector tabs.
+  await verifyRelayPinsOnMetal(4, EXPECTED_RELAY_OFFSETS, RELAY_ANCHORS, RELAY_VB, RELAY_SCALE, evaljs);
+  await verifyAssetPinAlignment(
+    "transistor",
+    5,
+    EXPECTED_TRANSISTOR_OFFSETS,
+    TRANSISTOR_CONNECTOR_IDS,
+    TRANSISTOR_ASSET,
+    evaljs
+  );
+  console.log("step9 relay/transistor asset alignment OK");
   await dropKindAt('led', 1000, 300);
   s = await waitFor("relay-demo LED should render as placed-6", (x) => x.placedLed6 !== null);
   await dropKindAt('led', 150, 550);
@@ -1100,6 +1405,391 @@ const state = () =>
   );
   assert(!s.issue, "unexpected issue banner after PIR step: " + s.issue);
   console.log("step12 expiry:", JSON.stringify(s));
+
+  // ---- 13. Potentiometer + Resistor + Capacitor (the RC timing trio). The
+  //         published wokwi-potentiometer owns its pointer interactions, so
+  //         the knob must be turned through PotentiometerView's capture-drag
+  //         overlay (which also must NOT drag the body around), and the
+  //         setKnobPosition message must make the snapshot echo the new wiper
+  //         fraction. Then wire the charging chain Resistor.terminal1 — Cap.a
+  //         — GPIO8 and Cap.b — GND and run a real-Python discharge/poll pulse:
+  //         GPIO8 OUT LOW discharges (DigitallyDriven force-adopt), re-format
+  //         as IN begins the charge, and the LOW→HIGH trip should land at
+  //         maxChargeSeconds(2) × fraction(10kΩ→0.5) = 1.0s. GPIO8 is freed
+  //         first by disconnecting the PIR's wire — whose line still reaches
+  //         the placed-1 `out` pin in this post-reload session (the demo
+  //         wiring w1–w6 stays; only that one wire comes off).
+  s = await state();
+  const wiresBeforePirDisconnect = s.wires.length;
+  await evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const sr = stage.getBoundingClientRect();
+    const scale = sr.width / 1200;
+    const m = document.querySelector('[data-testid="pin-placed-1-out"] circle').getBoundingClientRect();
+    const cx = (m.left + m.width / 2 - sr.left) / scale;
+    const cy = (m.top + m.height / 2 - sr.top) / scale;
+    const near = (l) => {
+      const d1 = Math.hypot(+l.getAttribute('x1') - cx, +l.getAttribute('y1') - cy);
+      const d2 = Math.hypot(+l.getAttribute('x2') - cx, +l.getAttribute('y2') - cy);
+      return Math.min(d1, d2) < 1.5;
+    };
+    const target = [...document.querySelectorAll('[data-testid^="wire-"]')]
+      .find((w) => [...w.querySelectorAll('line')].some(near));
+    if (target) target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return !!target;
+  })()`);
+  s = await waitFor(
+    "disconnecting the PIR wire should leave one fewer wire (freeing GPIO8)",
+    (x) => x.wires.length === wiresBeforePirDisconnect - 1
+  );
+  assert(s.placedBodies === 1, "after freeing GPIO8 only the PIR should remain, got placedBodies=" + s.placedBodies);
+
+  await dropKindAt('potentiometer', 480, 560);
+  s = await waitFor("dropped Potentiometer should render as placed-2 at knob 0.000", (x) => x.potKnob === "0.000");
+  const potPosBefore = s.placed2;
+  await dropKindAt('resistor', 580, 560);
+  s = await waitFor("dropped Resistor should render as placed-3 at 10000 ohms", (x) => x.resistorOhms === "10000");
+  await dropKindAt('capacitor', 680, 560);
+  s = await waitFor(
+    "dropped Capacitor should render as placed-4 (threshold 0 means it charges instantly alone)",
+    (x) => x.capCharged === "true"
+  );
+
+  // Sub-pixel pin alignment for all three parts: the canvas markers must sit on
+  // each lead. For the pot/resistor that is verified against the element's own
+  // live pinInfo; for the hand-drawn capacitor the art's leg tips are the
+  // target (no pinInfo exists to diff against).
+  const rcGeo = await evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const sr = stage.getBoundingClientRect();
+    const scale = sr.width / 1200;
+    const originOf = (id) => {
+      const b = document.querySelector('[data-testid="body-'+id+'"]').getBoundingClientRect();
+      return { x: (b.left - sr.left) / scale, y: (b.top - sr.top) / scale };
+    };
+    const readPin = (name) => {
+      const m = document.querySelector('[data-testid="pin-'+name+'"] circle').getBoundingClientRect();
+      return { x: (m.left + m.width / 2 - sr.left) / scale, y: (m.top + m.height / 2 - sr.top) / scale };
+    };
+    const potEl = document.querySelector('[data-testid="body-placed-2"] app-potentiometer');
+    const resEl = document.querySelector('[data-testid="body-placed-3"] wokwi-resistor');
+    const potInfo = potEl?.pinInfo ?? [];
+    const resInfo = resEl?.pinInfo ?? [];
+    const aligns = [];
+    for (const [part, id, offsets] of [
+      ['pot', 'placed-2', { terminal1: { x: 29, y: 68.5 }, wiper: { x: 39, y: 68.5 }, terminal2: { x: 49, y: 68.5 } }],
+      ['res', 'placed-3', { terminal1: { x: 0, y: 5.65 }, terminal2: { x: 58.8, y: 5.65 } }],
+      ['cap', 'placed-4', { a: { x: 14, y: 64 }, b: { x: 34, y: 64 } }],
+    ]) {
+      const o = originOf(id);
+      for (const [name, off] of Object.entries(offsets)) {
+        const got = readPin(id + '-' + name);
+        aligns.push({ part: part + '-' + name, got, dx: got.x - (o.x + off.x), dy: got.y - (o.y + off.y) });
+      }
+    }
+    return {
+      potTag: potEl?.tagName.toLowerCase() ?? null,
+      resTag: resEl?.tagName.toLowerCase() ?? null,
+      potInfo: potInfo.map((p) => ({ name: p.name, x: p.x, y: p.y })),
+      resInfo: resInfo.map((p) => ({ name: p.name, x: p.x, y: p.y })),
+      aligns,
+    };
+  })()`);
+  console.log("step13 RC pin geometry:", JSON.stringify(rcGeo));
+  assert(
+    rcGeo.potTag === "app-potentiometer",
+    "pot body must be the vendored app-potentiometer, got " + rcGeo.potTag
+  );
+  assert(rcGeo.resTag === "wokwi-resistor", "resistor body must be wokwi-resistor, got " + rcGeo.resTag);
+  const potInfoMap = Object.fromEntries(rcGeo.potInfo.map((p) => [p.name, p]));
+  const resInfoMap = Object.fromEntries(rcGeo.resInfo.map((p) => [p.name, p]));
+  assert(
+    (["GND", "SIG", "VCC"]).every((n) => potInfoMap[n]),
+    "app-potentiometer must expose GND/SIG/VCC leads, got " + JSON.stringify(rcGeo.potInfo)
+  );
+  assert(
+    (["1", "2"]).every((n) => resInfoMap[n]),
+    "wokwi-resistor must expose leads '1'/'2', got " + JSON.stringify(rcGeo.resInfo)
+  );
+  for (const [elm, live, want] of [
+    ["terminal1", potInfoMap.GND, EXPECTED_POT_OFFSETS.terminal1],
+    ["wiper", potInfoMap.SIG, EXPECTED_POT_OFFSETS.wiper],
+    ["terminal2", potInfoMap.VCC, EXPECTED_POT_OFFSETS.terminal2],
+  ]) {
+    assert(
+      live && Math.abs(live.x - want.x) < 0.01 && Math.abs(live.y - want.y) < 0.01,
+      "potPinOffsets must match app-potentiometer pinInfo for " + elm + ", got " + JSON.stringify(live)
+    );
+  }
+  for (const [elm, live, want] of [
+    ["terminal1", resInfoMap["1"], EXPECTED_RES_OFFSETS.terminal1],
+    ["terminal2", resInfoMap["2"], EXPECTED_RES_OFFSETS.terminal2],
+  ]) {
+    assert(
+      live && Math.abs(live.x - want.x) < 0.01 && Math.abs(live.y - want.y) < 0.01,
+      "resistorPinOffsets must match wokwi-resistor pinInfo for " + elm + ", got " + JSON.stringify(live)
+    );
+  }
+  for (const a of rcGeo.aligns) {
+    assert(
+      Math.abs(a.dx) < 1 && Math.abs(a.dy) < 1,
+      "pin " + a.part + " must align sub-pixel on its lead, got dx=" + a.dx.toFixed(3) + " dy=" + a.dy.toFixed(3)
+    );
+  }
+
+  // Turn the knob to 1.0 through the capture-drag overlay: a -120px vertical
+  // drag maps KNOB_TRAVEL(120) to full travel. The 1.000 must come back from
+  // the ENGINE (postMessage → Potentiometer.setKnobPosition → snapshot), not
+  // from local view state, and the body must not have been dragged.
+  await evaljs(`(()=>{
+    const knob = document.querySelector('[data-testid="potentiometer-knob"]');
+    const r = knob.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    knob.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: cx, clientY: cy, pointerId: 1, pointerType: 'mouse' }));
+    knob.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, clientX: cx, clientY: cy - 120, pointerId: 1, pointerType: 'mouse' }));
+    knob.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, clientX: cx, clientY: cy - 120, pointerId: 1, pointerType: 'mouse' }));
+    return true;
+  })()`);
+  s = await waitFor("knob drag should drive the engine's knobPosition to 1.000", (x) => x.potKnob === "1.000", 5000);
+  assert(
+    s.placed2 && s.placed2.x === potPosBefore.x && s.placed2.y === potPosBefore.y,
+    "turning the knob must not drag the potentiometer body, got " + JSON.stringify(s.placed2) + " before=" + JSON.stringify(potPosBefore)
+  );
+
+  // Wire the charging chain and run a real Python discharge/poll pulse. The
+  // worker owns the Circuit here, and the JSPI non-blocking sleep lets our own
+  // 60fps tick loop advance the capacitor charge clock mid-python-loop. The
+  // demo wires w1–w6 stay in place; exactly three new wires must appear.
+  const wiresBeforeRc = (await state()).wires.length;
+  await wire('pin-placed-3-terminal1', 'pin-placed-4-a');
+  await wire('pin-placed-4-a', 'pin-board-GPIO8');
+  await wire('pin-placed-4-b', 'pin-board-GND');
+  s = await waitFor(
+    "all three RC wires should exist",
+    (x) => x.wires.length === wiresBeforeRc + 3
+  );
+  console.log("step13 RC wired:", JSON.stringify(s));
+
+  await evaljs(`(()=>{
+    const ta = document.querySelector('textarea');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
+    setter.call(ta, 'import machine, time\\nprint("RC13START")\\np = machine.Pin(8, machine.Pin.OUT, machine.Pin.PULL_DOWN)\\np.value(0)\\np = machine.Pin(8, machine.Pin.IN)\\nt0 = time.monotonic()\\nwhile p.value() == 0:\\n    if time.monotonic() - t0 > 3.0:\\n        print("RC13_ELAPSED=3000")\\n        break\\n    time.sleep(0.02)\\nelapsed = time.monotonic() - t0\\nif elapsed <= 3.0:\\n    print("RC13_ELAPSED=" + str(int(elapsed * 1000)))\\n');
+    ta.dispatchEvent(new Event('input',{bubbles:true}));
+    return true;
+  })()`);
+  const rc13Val = await evaljs(`(()=> document.querySelector('textarea').value)()`);
+  assert(rc13Val.includes("RC13START"), "editor did not take the step13 script");
+  await evaljs(`(()=>{ [...document.querySelectorAll('button')]
+    .find((x)=>x.textContent.trim()==='Run').click(); return true; })()`);
+  s = await waitFor("RC pulse should print RC13_ELAPSED", (x) => x.output?.includes("RC13_ELAPSED="), 20000);
+  const rc13Elapsed = parseInt((s.output.split("RC13_ELAPSED=").pop() ?? "0").split(/[^\d]/)[0], 10);
+  console.log("step13 RC elapsed (ms):", rc13Elapsed);
+  assert(
+    rc13Elapsed >= 600 && rc13Elapsed <= 1400,
+    "10kΩ charge should trip the LOW→HIGH readout around 1000ms (±400), got " + rc13Elapsed
+  );
+  s = await waitFor("GPIO8 should sit HIGH once charged", (x) => x.capCharged === "true");
+  assert(!s.issue, "unexpected issue banner after RC step: " + s.issue);
+  console.log("step13 charged:", JSON.stringify(s));
+
+  // ---- 14. UltrasonicSensor (published wokwi-hc-sr04, used unchanged). The
+  //         four canvas markers must sit on the element's own pinInfo sub-pixel;
+  //         the wires run vcc->3V3_OUT, trig->GPIO9, echo->GPIO10, gnd->GND.
+  //         Then the slider drag relays a parametric distance stimulus
+  //         (top-setSimulatedDistance) and REAL Python times the TRIG/ECHO pulse
+  //         with the micros()/tickUs() bridge: 300cm then 360cm must measure
+  //         exactly distance*58us. Note the write tick (1/60s) already advances
+  //         16667us into the 17400/20880us echo, so the measured t1-t0 is still
+  //         the full distance*58. Dragging to the "no object" stop must produce
+  //         NO echo. GPIO9/10 are free. This runs in the post-reload session, so
+  //         the drop is placed-5 (PIR/pot/res/cap are placed-1..4).
+  await dropKindAt('ultrasonic', 860, 480);
+  s = await waitFor("dropped Ultrasonic should render as placed-5", (x) => x.placedUltrasonic !== null);
+  assert(
+    s.ultrasonicDistance === "none",
+    "ultrasonic should start with no object (null distance), got " + s.ultrasonicDistance
+  );
+  assert(s.ultrasonicReadout === "no object", "readout should show the no-object default, got " + s.ultrasonicReadout);
+
+  // Sub-pixel pin alignment: the four canvas markers must sit on the published
+  // element's own pinInfo (VCC/TRIG/ECHO/GND along the bottom face at y=94.5).
+  const ultraGeo = await evaljs(`(()=>{
+    const stage = document.querySelector('[data-testid="circuit-stage"]');
+    const sr = stage.getBoundingClientRect();
+    const scale = sr.width / 1200;
+    const body = document.querySelector('[data-testid="body-placed-5"]').getBoundingClientRect();
+    const origin = { x: (body.left - sr.left) / scale, y: (body.top - sr.top) / scale };
+    const el = document.querySelector('[data-testid="body-placed-5"] wokwi-hc-sr04');
+    const info = el?.pinInfo ?? [];
+    const byName = Object.fromEntries(info.map((pi) => [pi.name, { x: pi.x, y: pi.y }]));
+    const aligns = info.map((pi) => {
+      const m = document.querySelector('[data-testid="pin-placed-5-'+pi.name.toLowerCase()+'"] circle').getBoundingClientRect();
+      const got = { x: (m.left + m.width / 2 - sr.left) / scale, y: (m.top + m.height / 2 - sr.top) / scale };
+      const want = { x: origin.x + pi.x, y: origin.y + pi.y };
+      return { name: pi.name, got, want, dx: got.x - want.x, dy: got.y - want.y };
+    });
+    return { elTag: el?.tagName.toLowerCase() ?? null, names: info.map((pi) => pi.name), byName, aligns };
+  })()`);
+  console.log("step14 ultrasonic pin geometry:", JSON.stringify(ultraGeo));
+  assert(
+    ultraGeo.elTag === "wokwi-hc-sr04",
+    "ultrasonic body must be the published wokwi-hc-sr04, got " + ultraGeo.elTag
+  );
+  assert(
+    JSON.stringify([...ultraGeo.names].sort()) === JSON.stringify(["ECHO", "GND", "TRIG", "VCC"].sort()),
+    "published element must expose four pins VCC/TRIG/ECHO/GND, got " + JSON.stringify(ultraGeo.names)
+  );
+  for (const name of ["VCC", "TRIG", "ECHO", "GND"]) {
+    const live = ultraGeo.byName[name];
+    const off = EXPECTED_ULTRA_OFFSETS[name.toLowerCase()];
+    assert(
+      live && Math.abs(live.x - off.x) < 0.01 && Math.abs(live.y - off.y) < 0.01,
+      "ultrasonicPinOffsets must match the element pinInfo for " + name + ", got " + JSON.stringify(live)
+    );
+  }
+  for (const a of ultraGeo.aligns) {
+    assert(
+      Math.abs(a.dx) < 1 && Math.abs(a.dy) < 1,
+      "pin " + a.name + " must align sub-pixel on its lead, got dx=" + a.dx.toFixed(3) + " dy=" + a.dy.toFixed(3)
+    );
+  }
+
+  const wiresBeforeUltra = (await state()).wires.length;
+  await wire('pin-placed-5-vcc', 'pin-board-3V3_OUT');
+  await wire('pin-placed-5-trig', 'pin-board-GPIO9');
+  await wire('pin-placed-5-echo', 'pin-board-GPIO10');
+  await wire('pin-placed-5-gnd', 'pin-board-GND');
+  s = await waitFor(
+    "all four ultrasonic wires should exist",
+    (x) => x.wires.length === wiresBeforeUltra + 4
+  );
+  console.log("step14 ultrasonic wired:", JSON.stringify(s));
+
+  // The distance slider is the stimulus. Dragging its overlay relays
+  // top-setSimulatedDistance to the engine (client px / SLIDER_W(150) paddles
+  // the 0..1 fraction; a fraction >= 1 is the "no object" stop), and the
+  // readout must come back from the snapshot - while the body never drags.
+  const slideTo = (targetCm) => evaljs(`(()=>{
+    const wrapper = document.querySelector('[data-testid="ultrasonic"]');
+    const attr = wrapper.getAttribute('data-distance');
+    const now = attr === 'none' ? null : parseFloat(attr);
+    const startFrac = now === null ? 1 : (now - 2) / 398;
+    const targetFrac = ${targetCm === null ? 1 : (targetCm - 2) / 398};
+    const slider = document.querySelector('[data-testid="ultrasonic-slider"]');
+    const r = slider.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const delta = (targetFrac - startFrac) * 150;
+    slider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: cx, clientY: cy, pointerId: 14, pointerType: 'mouse' }));
+    slider.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, clientX: cx + delta, clientY: cy, pointerId: 14, pointerType: 'mouse' }));
+    slider.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, button: 0, clientX: cx + delta, clientY: cy, pointerId: 14, pointerType: 'mouse' }));
+    return { startFrac, targetFrac, delta };
+  })()`);
+
+  const ultraPosBefore = s.placedUltrasonic;
+  await slideTo(300);
+  s = await waitFor(
+    "slider drag should set the 300 cm readout",
+    (x) => x.ultrasonicReadout === "300 cm" && x.ultrasonicDistance === "300",
+    5000
+  );
+  assert(
+    s.placedUltrasonic && s.placedUltrasonic.x === ultraPosBefore.x && s.placedUltrasonic.y === ultraPosBefore.y,
+    "sweeping the distance slider must not drag the ultrasonic body, got " + JSON.stringify(s.placedUltrasonic)
+  );
+  console.log("step14 slider 300:", JSON.stringify(s));
+
+  // Real Python timing over the bridge: timestamp before trig.value(1) (whose
+  // own 1/60s write tick already advances 16667us into the echo), then
+  // tickUs(1)-step until the echo drops - the elapsed must be exactly cm*58 =
+  // 17400us for 300cm. Each probe uses a unique output marker so a stale print
+  // from the previous probe can never satisfy the waitFor.
+  const ultraMeasureScript = (label) => `import machine
+from js import __pico_bridge
+print("UA14START")
+trig = machine.Pin(9, machine.Pin.OUT)
+trig.value(0)
+echo = machine.Pin(10, machine.Pin.IN)
+t0 = __pico_bridge.micros()
+trig.value(1)
+for _ in range(300000):
+    if echo.value():
+        break
+    __pico_bridge.tickUs(1)
+for _ in range(300000):
+    if not echo.value():
+        break
+    __pico_bridge.tickUs(1)
+dt = __pico_bridge.micros() - t0
+print("UA14D${label}=" + str(int(round(dt / 58))))`;
+  const ultraNoEchoScript = `import machine
+from js import __pico_bridge
+print("UA14START")
+trig = machine.Pin(9, machine.Pin.OUT)
+trig.value(0)
+echo = machine.Pin(10, machine.Pin.IN)
+trig.value(1)
+found = False
+for _ in range(30000):
+    if echo.value():
+        found = True
+        break
+    __pico_bridge.tickUs(1)
+print("UA14_ECHO=" + str(found))
+trig.value(0)`;
+  const runProbe14 = async (label, script, marker) => {
+    await evaljs(`(()=>{
+      const ta = document.querySelector('textarea');
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
+      setter.call(ta, ${JSON.stringify(script)});
+      ta.dispatchEvent(new Event('input',{bubbles:true}));
+      return true;
+    })()`);
+    await clickRun();
+    s = await waitFor("ultrasonic probe (" + label + ") should print", (x) => x.output?.includes(marker), 30000);
+    return s.output;
+  };
+  const parseMeasured = (out, marker) =>
+    parseInt((out.split(marker).pop() ?? "0").split(/[^\d]/)[0], 10);
+
+  let out14 = await runProbe14("300cm", ultraMeasureScript("300"), "UA14D300=");
+  let dist14 = parseMeasured(out14, "UA14D300=");
+  assert(
+    dist14 === 300,
+    "300 cm must measure a 17400us echo (58us/cm), got " + dist14 + "cm"
+  );
+  console.log("step14 measured 300cm:", dist14);
+
+  await slideTo(360);
+  s = await waitFor(
+    "slider drag should set the 360 cm readout",
+    (x) => x.ultrasonicReadout === "360 cm" && x.ultrasonicDistance === "360",
+    5000
+  );
+  console.log("step14 slider 360:", JSON.stringify(s));
+  out14 = await runProbe14("360cm", ultraMeasureScript("360"), "UA14D360=");
+  dist14 = parseMeasured(out14, "UA14D360=");
+  assert(
+    dist14 === 360,
+    "360 cm must measure a 20880us echo (58us/cm), got " + dist14 + "cm"
+  );
+  console.log("step14 measured 360cm:", dist14);
+
+  // Drag to / past the far end = "no object" (null): readout flips and a fresh
+  // TRIG edge must produce NO echo - the bounded wait finds echo still LOW.
+  await slideTo(null);
+  s = await waitFor(
+    "slider at the far stop should read no object",
+    (x) => x.ultrasonicReadout === "no object" && x.ultrasonicDistance === "none",
+    5000
+  );
+  console.log("step14 slider no-object:", JSON.stringify(s));
+  out14 = await runProbe14("no-object", ultraNoEchoScript, "UA14_ECHO=");
+  const echoSeen = (out14.split("UA14_ECHO=").pop() ?? "None").match(/^(True|False)/)?.[1] ?? "None";
+  assert(echoSeen === "False", "a null distance must produce NO echo, got " + echoSeen);
+  console.log("step14 no-echo confirmed:", echoSeen);
+  assert(!s.issue, "unexpected issue banner after the ultrasonic step: " + s.issue);
 
   console.log("ALL BROWSER CHECKS PASSED");
 } catch (err) {
