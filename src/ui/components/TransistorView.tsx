@@ -12,7 +12,11 @@ import transistorArtUrl from "../assets/transistor-to92-npn.svg";
 // core/, so the SOT-23 surface-mount fallback was NOT needed. It is also the
 // better visual match because its left-to-right lead order already equals our
 // BC547-style reading, so the pin labels are unchanged.
-export const TRANSISTOR_W = 5.83 * 3.78; // 22.037 px = the part's 5.83mm width
+// SIZE KNOB: rendered width in mm (real TO-92 = 5.83mm across the leads).
+// Raise it to scale the whole part up uniformly — height and the three lead
+// offsets derive from TRANSISTOR_W via TRANSISTOR_SCALE (docs/DECISIONS.md).
+export const TRANSISTOR_W_MM = 7.83; // the part's 5.83mm width
+export const TRANSISTOR_W = TRANSISTOR_W_MM * 3.78; // 22.037 px = the part's 5.83mm width
 // REAL-SIZE SCALING: the part's own viewBox is "0 0 16.527 24.081"
 // (0.22954in x 0.33446in), an Inkscape-72dpi drawing — 16.527 px @ 72dpi =
 // 0.22954in = 5.83mm, which the shared Wokwi-calibrated scale (3.78 px/mm,

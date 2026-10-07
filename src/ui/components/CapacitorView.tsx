@@ -16,16 +16,21 @@ import type { PinOffsetMap } from "../types";
 // the exported size reports the real dimensions.
 const CAP_ART_W = 48;
 const CAP_ART_H = 64;
-export const CAP_W = CAP_ART_W * ((10 * 3.78) / 42); // 43.2 px
-export const CAP_H = CAP_ART_H * ((10 * 3.78) / 42); // 57.6 px
+// SIZE KNOB: rendered width in mm (the full 48-unit drawing, leads included).
+// Raise it to scale the whole capacitor up uniformly — CAP_SCALE, the size,
+// and the a/b leg offsets all follow (docs/DECISIONS.md).
+export const CAP_W_MM = (43.2 / 3.78) + 7; // 11.4286mm rendered width at default
+const CAP_SCALE = (CAP_W_MM * 3.78) / CAP_ART_W; // 0.9 at default
+export const CAP_W = CAP_ART_W * CAP_SCALE; // 43.2 px
+export const CAP_H = CAP_ART_H * CAP_SCALE; // 57.6 px
 
 // Leg tips (matching the two leads drawn below): `a` is the ACTIVE net pin
 // (left leg — the one the resistor/pot and GPIO usually share), `b` the
-// decorative ground-side lead (right leg). Scaled by the same k = 0.9 as the
+// decorative ground-side lead (right leg). Scaled by the same CAP_SCALE as the
 // art, so they still land on the drawn leg circles.
 export const capacitorPinOffsets: PinOffsetMap = {
-  a: { x: 14 * 0.9, y: 64 * 0.9 }, // 12.6, 57.6
-  b: { x: 34 * 0.9, y: 64 * 0.9 }, // 30.6, 57.6
+  a: { x: 14 * CAP_SCALE, y: 64 * CAP_SCALE }, // 12.6, 57.6
+  b: { x: 34 * CAP_SCALE, y: 64 * CAP_SCALE }, // 30.6, 57.6
 };
 
 // Hand-drawn radial electrolytic. `chargeFraction` (0..1) fills the can with a

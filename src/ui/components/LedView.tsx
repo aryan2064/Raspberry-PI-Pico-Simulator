@@ -2,11 +2,23 @@ import { useEffect, useRef } from "react";
 import type { LEDElement } from "@wokwi/elements";
 import type { PinOffsetMap } from "../types";
 
+// The wokwi-led element renders its shadow SVG at a natural 40x50px. The
+// rendered width in mm is the SIZE KNOB: bump LED_W_MM and every derived
+// constant follows (heavier default = exactly how it re-derives from the
+// natural size, so the default stays byte-identical to the natural art).
+export const LED_W_MM = 40 / 3.78; // SIZE KNOB (mm) — 10.58mm natural width
+const LED_NATURAL_W = 40;
+const LED_NATURAL_H = 50;
+const LED_F = +((LED_W_MM * 3.78) / LED_NATURAL_W).toFixed(4); // 1 at default
+export const LED_W = +((LED_NATURAL_W * LED_F).toFixed(3));
+export const LED_H = +((LED_NATURAL_H * LED_F).toFixed(3));
+
 // wokwi-led pin geometry (from its pinInfo): both leads run out of the
-// bottom edge — anode is the right lead, cathode the left.
+// bottom edge — anode is the right lead, cathode the left. Scaled by LED_F so
+// the canvas markers follow the resized art.
 export const ledPinOffsets: PinOffsetMap = {
-  anode: { x: 25, y: 42 },
-  cathode: { x: 15, y: 42 },
+  anode: { x: +(25 * LED_F).toFixed(3), y: +(42 * LED_F).toFixed(3) },
+  cathode: { x: +(15 * LED_F).toFixed(3), y: +(42 * LED_F).toFixed(3) },
 };
 
 interface LedViewProps {
@@ -45,8 +57,21 @@ export function LedView({ renderInfo, selected }: LedViewProps) {
         outlineOffset: 2,
       }}
     >
-      <div data-testid="led-body" data-on={isOn ? "true" : "false"}>
-        <wokwi-led ref={ledRef} />
+      <div
+        data-testid="led-body"
+        data-on={isOn ? "true" : "false"}
+        style={{ position: "relative", width: LED_W, height: LED_H }}
+      >
+        <div
+          style={{
+            width: LED_NATURAL_W,
+            height: LED_NATURAL_H,
+            transform: `scale(${LED_F})`,
+            transformOrigin: "top left",
+          }}
+        >
+          <wokwi-led ref={ledRef} />
+        </div>
       </div>
     </div>
   );

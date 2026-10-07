@@ -16,8 +16,13 @@ import picoBreadboardUrl from "../assets/pico-breadboard.svg";
 // "Shared component scale") the long edge renders 200.38 px, and the baked
 // pin matrix maps each 0.100" pad pitch to 2.54mm = 9.6012 stage px — the same
 // pad pitch the Wokwi-native parts use (e.g. stepper, 9.6012 px per 0.1in).
-export const PICO_BOARD_W = 2.087 * 25.4 * 3.78; // 200.377 px (53.01mm true width)
-export const PICO_BOARD_H = 0.827 * 25.4 * 3.78; // 79.401 px (21.0mm true depth)
+// SIZE KNOB: rendered long-edge width in mm (2.087" = 53.01mm). Raise it to
+// scale the whole board up uniformly for human legibility — the SCALE below
+// follows it so every pad stays glued to the art (docs/DECISIONS.md).
+export const PICO_BOARD_W_MM = 2.087 * 25.4 + 30; // 53.01mm true long edge
+const BOARD_SCALE = 3.78 * (PICO_BOARD_W_MM / (2.087 * 25.4)); // effective px/mm
+export const PICO_BOARD_W = 2.087 * 25.4 * BOARD_SCALE; // 200.377 px (53.01mm true width)
+export const PICO_BOARD_H = PICO_BOARD_W * (0.827 / 2.087); // 79.401 px (21.0mm true depth, aspect preserved)
 
 // Exact connection-point positions, extracted from the part's own markup (not
 // eyeballed): each physical pad is an invisible <circle id="connector{N}pin"
@@ -40,7 +45,7 @@ export const PICO_BOARD_H = 0.827 * 25.4 * 3.78; // 79.401 px (21.0mm true depth
 // connector39 = GPIO16 at the far end). The earlier build placed GPIO16/26/27/
 // 28 and the power pins by connector index instead, which put their markers a
 // few pads away from their true positions; this table is the corrected one.
-const SCALE = (2.54 * 3.78) / 100; // 0.096012 px per Fritzing unit (0.001")
+const SCALE = (2.54 * BOARD_SCALE) / 100; // px per Fritzing unit (0.001"); scales with the knob so pads stay on the art
 const conn = (cx: number, cy: number): Vec => ({
   x: +(cy * SCALE).toFixed(3),
   y: +(cx * SCALE).toFixed(3),

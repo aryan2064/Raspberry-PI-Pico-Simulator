@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CircuitCanvas } from "./ui/CircuitCanvas";
-import { ComponentPalette } from "./ui/ComponentPalette";
 import { ScriptPanel } from "./ui/ScriptPanel";
 import type { OutputEntry } from "./ui/ScriptPanel";
+import { OutputConsole } from "./ui/OutputConsole";
 import type { Vec } from "./ui/types";
 import type { ComponentKind, PinRef, SnapshotMessage, Topology, WorkerToMainMessage } from "./execution/messages";
 
@@ -60,6 +60,34 @@ function initialPositions(components: Topology["components"]): Record<string, Ve
 }
 
 function App() {
+  // --- Theme handling (light / dark) -------------------------------------------------
+  // Persisted user preference ("light" | "dark"). If missing, follow system.
+  const [theme, setTheme] = useState(() => {
+    // LocalStorage value may be "light" or "dark"
+    try {
+      const stored = localStorage.getItem("pico-sim-theme");
+      if (stored === "light" || stored === "dark") return stored;
+    } catch (_) {}
+    // No stored pref → follow system preference if available
+    if (typeof window !== "undefined" && window.matchMedia) {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    return "light";
+  });
+
+  // Apply the effective theme to the document root.  Using a data attribute lets CSS
+  // token overrides stay simple.
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("pico-sim-theme", theme);
+    } catch (_) {}
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => (prev === "light" ? "dark" : "light"));
+  }, []);
+  // -----------------------------------------------------------------------------------
   const workerRef = useRef<Worker | null>(null);
   const workerTimerRef = useRef<number | null>(null);
   const respondedRef = useRef(false);
@@ -295,37 +323,34 @@ function App() {
   }, [spawnWorker]);
 
   return (
-    <main style={{ maxWidth: 1240, margin: "0 auto", padding: "1rem" }}>
-      <h1>Pico Sim</h1>
-      <p>
-        Drag a part from the palette onto the canvas to place it, then click
-        pins to wire it (same pin twice cancels). Click a wire to remove it;
-        drag a part's body to move it, or click to select it and press Delete
-        (or the Delete key) to remove it. Press and hold the green button to
-        drive the first LED, or press Run to blink the second LED from
-        MicroPython (machine.Pin only for now).
-      </p>
-      {workerIssue && (
-        <div
-          role="alert"
-          data-testid="worker-issue"
-          style={{
-            margin: "0 0 0.5rem",
-            padding: "0.5rem 0.75rem",
-            background: "#ffe3e3",
-            color: "#a40000",
-            border: "1px solid #a40000",
-            borderRadius: 4,
-            fontFamily: "monospace",
-            whiteSpace: "pre-wrap",
-          }}
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden />
+          Pico Sim
+        </div>
+        <span className={workerIssue ? "status status-error" : "status"}>
+          <span className="status-dot" aria-hidden />
+          {workerIssue ? "Worker issue" : "Simulator ready"}
+        </span>
+        {/* Theme toggle (sun/moon) */}
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+          onClick={toggleTheme}
         >
+          {theme === "light" ? "☀" : "☾"}
+        </button>
+      </header>
+      {workerIssue && (
+        <div role="alert" data-testid="worker-issue" className="worker-issue">
           {workerIssue}
         </div>
       )}
-      <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
-        <ComponentPalette />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "1rem" }}>
+      <div className="workspace">
+        <ScriptPanel onRun={handleRun} onStop={handleStop} />
+        <main className="canvas-column">
           <CircuitCanvas
             snapshot={snapshot}
             connections={connections}
@@ -340,10 +365,10 @@ function App() {
             onPlaceComponent={handlePlaceComponent}
             onDeleteComponent={handleDeleteComponent}
           />
-          <ScriptPanel output={output} onRun={handleRun} onStop={handleStop} />
-        </div>
+          <OutputConsole output={output} />
+        </main>
       </div>
-    </main>
+    </div>
   );
 }
 

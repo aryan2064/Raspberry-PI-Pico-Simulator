@@ -18,7 +18,11 @@ import relayArtUrl from "../assets/dfrobot-3v-relay-module.svg";
 // REAL-SIZE SCALING: the physical board is 38 x 33 x 20 mm (DFRobot DFR0473
 // product page). It renders at the shared Wokwi-calibrated scale of 3.78 px/mm
 // (docs/DECISIONS.md, "Shared component scale") — 38 mm -> 143.64 px wide.
-export const RELAY_W = 38 * 3.78; // 143.64 px = the board's 38mm real width
+// SIZE KNOB: rendered board width in mm (real DFR0473 board = 38mm). Raise it
+// to scale the whole relay up uniformly — height and every pin anchor derive
+// from RELAY_W, so nothing else needs to change (docs/DECISIONS.md).
+export const RELAY_W_MM = 40; // 38mm real board width
+export const RELAY_W = RELAY_W_MM * 3.78; // 143.64 px = the board's 38mm real width
 // The vendored asset's viewBox crops the Inkscape A4 page to the module's
 // drawing: "211 566 124 106.5" (the board spans 124 x 106.5 user units at
 // origin 211,566). Height is DERIVED from the width through the asset's own

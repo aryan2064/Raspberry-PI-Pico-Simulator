@@ -1,13 +1,603 @@
+/* ============================================================
+   "Blueprinted Bench" — light engineering-workbench chrome.
+   Every value below is the ONLY source of truth. If a number
+   is not in this block, it does not belong in a component.
+   ============================================================ */
+
 :root {
-  font-family: system-ui, -apple-system, sans-serif;
-  color: #213547;
-  background-color: #ffffff;
+  /* TYPE — one ratio (1.25 major third) for all app chrome */
+  --font-display: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --step--2: 0.64rem;
+  --step--1: 0.8rem;
+  --step-0: 1rem;
+  --step-1: 1.25rem;
+  --step-2: 1.5625rem;
+
+  /* SPACE — one 4px base unit, never anything in between */
+  --space-3xs: 4px;
+  --space-2xs: 8px;
+  --space-xs: 12px;
+  --space-s: 16px;
+  --space-m: 24px;
+  --space-l: 32px;
+  --space-xl: 48px;
+
+  /* COLOR — a ramp, not one-offs. One accent: the wiring blue. */
+  --base: #f2f4f7;
+  --surface: #ffffff;
+  --surface-2: #fafbfc;
+  --ink: #17191d;
+  --ink-2: #4d545c;
+  --ink-3: #8a929c;
+  --line: #d9dee5;
+  --line-strong: #c2cad3;
+  --accent: #1f8aff;
+  --accent-strong: #0f63d9;
+  --accent-soft: #eaf3ff;
+  --ok: #16a34a;
+  --ok-strong: #118a3e;
+  --danger: #d81b1b;
+  --danger-strong: #a40000;
+  --danger-soft: #fdecec;
+  --grid-dot: #cbd2da;
+
+  /* FORM — one radius, two shadows (tight contact + wide ambient) */
+  --radius: 6px;
+  --border: 1px solid var(--line);
+  --shadow-raise: 0 1px 2px rgba(18, 26, 38, 0.06);
+  --shadow-pop: 0 2px 4px rgba(18, 26, 38, 0.08), 0 12px 28px rgba(18, 26, 38, 0.14);
+
+  /* MOTION — three durations, two easings */
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 320ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Echo-in-flight indicator on the ultrasonic sensor (see
-   UltrasonicSensorView.tsx). Rendered while the engine reports `measuring`
-   (the echo pulse lasts µs..ms of SIM time), so it reads as a quick amber
-   flash inside the two dome/lens circles. */
+/* ---- dark theme overrides (light/dark toggle) ---- */
+[data-theme="dark"] {
+  /* Base colors */
+  --base: #111827;            /* very dark gray */
+  --surface: #1f2937;        /* dark card background */
+  --surface-2: #374151;      /* slightly lighter for headers */
+  --ink: #f9fafb;            /* near‑white text */
+  --ink-2: #d1d5db;          /* secondary text */
+  --ink-3: #9ca3af;          /* tertiary text */
+  --line: #374151;           /* borders */
+  --line-strong: #4b5563;    /* stronger borders */
+  --accent: #60a5fa;        /* bright blue accent */
+  --accent-strong: #3b82f6;
+  --accent-soft: #1e40af;
+  --ok: #22c55e;             /* green for OK */
+  --ok-strong: #16a34a;
+  --ok-soft: #064e3b;
+  --danger: #ef4444;         /* red for errors */
+  --danger-strong: #b91c1c;
+  --danger-soft: #7f1d1d;
+  --grid-dot: #4b5563;       /* gray grid dot for dark */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-display);
+  color: var(--ink);
+  background: var(--base);
+  -webkit-font-smoothing: antialiased;
+  font-size: var(--step-0);
+  line-height: 1.45;
+}
+
+/* ---- app shell ---- */
+
+.app-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.topbar {
+  flex: 0 0 auto;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-s);
+  padding: 0 var(--space-s);
+  background: var(--surface);
+  border-bottom: var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.brand-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, var(--accent) 0 55%, var(--danger) 55%);
+  box-shadow: var(--shadow-raise);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  font-size: var(--step--1);
+  color: var(--ink-2);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ok);
+}
+
+.status-error .status-dot {
+  background: var(--danger);
+}
+
+.status-error {
+  color: var(--danger-strong);
+}
+
+.worker-issue {
+  flex: 0 0 auto;
+  margin: var(--space-xs) var(--space-s) 0;
+  padding: var(--space-2xs) var(--space-xs);
+  background: var(--danger-soft);
+  color: var(--danger-strong);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  white-space: pre-wrap;
+}
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: var(--space-s);
+  padding: var(--space-s);
+}
+
+/* ---- panels ---- */
+
+.pane {
+  background: var(--surface);
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-raise);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border-bottom: var(--border);
+  background: var(--surface-2);
+}
+
+.pane-title {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.pane-actions {
+  display: flex;
+  gap: var(--space-2xs);
+}
+
+/* ---- buttons: all five states on every one ---- */
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: var(--radius);
+  padding: var(--space-3xs) var(--space-xs);
+  font-family: var(--font-display);
+  font-size: var(--step--1);
+  font-weight: 550;
+  line-height: 1.2;
+  cursor: pointer;
+  box-shadow: var(--shadow-raise);
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.btn:hover {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent-strong);
+  color: #ffffff;
+}
+
+.btn-primary:hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.btn-run {
+  background: var(--ok);
+  border-color: var(--ok-strong);
+  color: #ffffff;
+}
+
+.btn-run:hover {
+  background: var(--ok-strong);
+}
+
+.btn-stop {
+  background: var(--danger);
+  border-color: var(--danger-strong);
+  color: #ffffff;
+}
+
+.btn-stop:hover {
+  background: var(--danger-strong);
+}
+
+.icon-btn {
+  appearance: none;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-raise);
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.icon-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.icon-btn:active {
+  transform: translateY(1px);
+}
+
+.icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---- code editor ---- */
+
+.code-pane {
+  flex: 0 0 360px;
+}
+
+.code-editor {
+  flex: 1;
+  min-height: 140px;
+  width: 100%;
+  border: none;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  padding: var(--space-xs);
+  resize: none;
+  tab-size: 4;
+}
+
+.code-editor:focus {
+  outline: none;
+}
+
+.code-editor:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* ---- canvas column + toolbar ---- */
+
+.canvas-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-s);
+}
+
+.canvas-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.canvas-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs);
+  background: var(--surface);
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-raise);
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.picker-anchor {
+  position: relative;
+}
+
+.add-part-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.add-part-plus {
+  font-family: var(--font-mono);
+  font-size: var(--step-1);
+  line-height: 0.6;
+}
+
+.zoom-readout {
+  min-width: 44px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--ink-2);
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  margin: 0 var(--space-2xs);
+}
+
+/* ---- component picker popover ---- */
+
+.picker-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  width: 300px;
+  max-height: 420px;
+  overflow: auto;
+  background: var(--surface);
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+
+.picker-header {
+  padding: var(--space-xs) var(--space-xs) var(--space-3xs);
+  font-size: var(--step-0);
+  font-weight: 650;
+}
+
+.picker-header small {
+  display: block;
+  font-size: var(--step--2);
+  font-weight: 400;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+
+.picker-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2xs);
+  padding: var(--space-xs);
+}
+
+.picker-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-family: var(--font-display);
+  font-size: var(--step--1);
+  font-weight: 550;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.picker-item:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.picker-item:active {
+  transform: translateY(1px);
+}
+
+.picker-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.picker-thumb {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 28px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+/* ---- console / serial output ---- */
+
+.console {
+  flex: 0 0 auto;
+  height: 176px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-raise);
+  overflow: hidden;
+}
+
+.console-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  background: var(--surface-2);
+  border-bottom: var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.console-body {
+  flex: 1;
+  margin: 0;
+  padding: var(--space-xs);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface);
+}
+
+.console-line {
+  color: var(--ink);
+}
+
+.console-line-error {
+  color: var(--danger-strong);
+}
+
+/* ---- canvas chrome ---- */
+
+.canvas-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--surface);
+  border: var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  user-select: none;
+}
+
+.canvas-viewport-dragging {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.canvas-ruler {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: top left;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.conflict-banner {
+  position: absolute;
+  left: var(--space-xs);
+  bottom: var(--space-xs);
+  z-index: 24;
+  max-width: calc(100% - 24px);
+  padding: var(--space-2xs) var(--space-xs);
+  background: var(--danger-soft);
+  color: var(--danger-strong);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  font-weight: 600;
+  font-size: var(--step--1);
+  box-shadow: var(--shadow-pop);
+}
+
+/* ---- ultrasonic measurement flash (see UltrasonicSensorView.tsx) ---- */
+
 .ultrasonic-measuring {
   position: absolute;
   inset: 0;
@@ -24,5 +614,11 @@
   }
   50% {
     opacity: 0.25;
+  }
+}
+
+@media (min-width: 1600px) {
+  .code-pane {
+    flex-basis: 400px;
   }
 }

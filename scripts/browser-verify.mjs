@@ -97,14 +97,15 @@ const EXPECTED_RES_OFFSETS = {
   terminal2: { x: 58.8, y: 5.65 },
 };
 
-// Capacitor pin anchors: mirror of CapacitorView's capacitorPinOffsets. The
-// capacitor is hand-drawn (no element pinInfo to diff against), so these come
-// from the art's own geometry at the shared Wokwi scale: the whole 48x64
-// drawing scales by k = 37.8/42 = 0.9 so the Ø10mm can lands at 10mm, moving
-// `a` (left leg) to (12.6, 57.6) and `b` (right/ground leg) to (30.6, 57.6).
+// Capacitor pin anchors: mirror of CapacitorView's capacitorPinOffsets,
+// derived from the same CAP_W_MM size knob capacitor the view uses, so a
+// human-legibility bump stays in sync: CAP_SCALE = (CAP_W_MM * 3.78)/48 and the
+// a/b leg tips (14/34, 64 drawing units) scale with it.
+const CAP_W_MM = (43.2 / 3.78) + 7; // rendered width in mm (48-unit drawing incl. leads) — SIZE KNOB (+7mm loaded)
+const CAP_SCALE = (CAP_W_MM * 3.78) / 48; // 0.9 at default
 const EXPECTED_CAP_OFFSETS = {
-  a: { x: 12.6, y: 57.6 },
-  b: { x: 30.6, y: 57.6 },
+  a: { x: +(14 * CAP_SCALE).toFixed(3), y: +(64 * CAP_SCALE).toFixed(3) },
+  b: { x: +(34 * CAP_SCALE).toFixed(3), y: +(64 * CAP_SCALE).toFixed(3) },
 };
 
 // Ultrasonic pin anchors: mirror of UltrasonicSensorView's ultrasonicPinOffsets,
@@ -132,7 +133,11 @@ const EXPECTED_ULTRA_OFFSETS = {
 // own pixels with the same centroid procedure the measuring probe used, so the
 // offset table is proven against the art itself — exactly the guarantee the old
 // connectorNpin rects used to give.
-const RELAY_SCALE = (38 * 3.78) / 124; // 1.158387... — 38mm board -> 143.64px at 3.78 px/mm
+// Relay size knob, mirroring RelayView's RELAY_W_MM: raise it to scale the
+// relay up uniformly. RELAY_SCALE and RELAY_ASSET derive from it, so every
+// expected offset follows without another edit.
+const RELAY_W_MM = 40; // SIZE KNOB (mm), 40 loaded (38mm real board width + 2mm legibility bump)
+const RELAY_SCALE = (RELAY_W_MM * 3.78) / 124; // 1.158387... — 38mm board -> 143.64px at 3.78 px/mm
 const RELAY_ANCHORS = {
   in: { x: 306.63, y: 626.688 }, // D header pad
   vcc: { x: 306.923, y: 618.791 }, // + header pad
@@ -148,7 +153,7 @@ const EXPECTED_RELAY_OFFSETS = Object.fromEntries(
     { x: +((a.x - RELAY_VB.x) * RELAY_SCALE).toFixed(3), y: +((a.y - RELAY_VB.y) * RELAY_SCALE).toFixed(3) },
   ])
 );
-const RELAY_ASSET = { file: "dfrobot-3v-relay-module.svg", width: 38 * 3.78, height: 106.5 * RELAY_SCALE };
+const RELAY_ASSET = { file: "dfrobot-3v-relay-module.svg", width: RELAY_W_MM * 3.78, height: 106.5 * RELAY_SCALE };
 
 // Transistor pin anchors: mirror of TransistorView's transistorPinOffsets,
 // derived from the shipped Fritzing TO-92 part's own connection markup in
@@ -156,17 +161,83 @@ const RELAY_ASSET = { file: "dfrobot-3v-relay-module.svg", width: 38 * 3.78, hei
 // the part's real 5.83mm width at the shared Wokwi scale — TRANSISTOR_SCALE =
 // 22.037/16.527). All three leads share y=30.11; left-to-right is
 // collector / base / emitter, the BC547 reading the engine already used.
-const EXPECTED_TRANSISTOR_OFFSETS = {
-  collector: { x: 1.44, y: 30.11 },
-  base: { x: 11.015, y: 30.11 },
-  emitter: { x: 20.597, y: 30.11 },
+// Transistor size knob + pin anchors: mirror TransistorView's TRANSISTOR_W_MM
+// and its connector rects, so the expected lead offsets derive exactly like the
+// view does (round((center-vb) * TRANSISTOR_SCALE, 3)) and stay in sync when the
+// knob is raised.
+const TRANSISTOR_W_MM = 7.83; // SIZE KNOB (mm), 7.83 loaded (real 5.83mm width + 2mm legibility bump)
+const TRANSISTOR_VB = { x: 0, y: 0, w: 16.527, h: 24.081 };
+const TRANSISTOR_SCALE = (TRANSISTOR_W_MM * 3.78) / TRANSISTOR_VB.w;
+const TRANSISTOR_CONNECTOR_RECTS = {
+  collector: [0, 22.081, 2.16, 1], // connector0pin — left lead
+  base: [7.181, 22.081, 2.16, 1], // connector1pin — centre lead
+  emitter: [14.367, 22.081, 2.16, 1], // connector2pin — right lead
 };
+const EXPECTED_TRANSISTOR_OFFSETS = Object.fromEntries(
+  Object.entries(TRANSISTOR_CONNECTOR_RECTS).map(([label, [x, y, w, h]]) => [
+    label,
+    {
+      x: +(((x + w / 2) - TRANSISTOR_VB.x) * TRANSISTOR_SCALE).toFixed(3),
+      y: +(((y + h / 2) - TRANSISTOR_VB.y) * TRANSISTOR_SCALE).toFixed(3),
+    },
+  ])
+);
 const TRANSISTOR_CONNECTOR_IDS = {
   collector: "connector0pin",
   base: "connector1pin",
   emitter: "connector2pin",
 };
-const TRANSISTOR_ASSET = { file: "transistor-to92-npn.svg", width: 5.83 * 3.78, height: 24.081 * (5.83 * 3.78) / 16.527 };
+const TRANSISTOR_ASSET = { file: "transistor-to92-npn.svg", width: TRANSISTOR_W_MM * 3.78, height: TRANSISTOR_VB.h * TRANSISTOR_SCALE };
+
+// Pico board size knob, mirroring PicoBoardView's PICO_BOARD_W_MM: the sample
+// pad positions below scale by BOARD_F so the expected markers follow the art.
+// NOTE: the loaded project has a deliberate +30mm human-legibility bump loaded
+// (83.01mm long edge), so the mirror keeps the SAME +30 — keep the two in sync.
+const PICO_BOARD_W_MM = 2.087 * 25.4 + 30; // SIZE KNOB (mm) — 83.01mm = 53.01mm true + 30
+const BOARD_F = PICO_BOARD_W_MM / (2.087 * 25.4);
+
+// LED / Button size knobs, mirroring LedView's LED_W_MM / ButtonView's
+// BUTTON_W_MM. The natural 40x50 / 67.28x45.35 shadow SVGs are the real-size
+// baseline; the step-1b marker expectations scale by the same F so a
+// human-legibility bump keeps the aligned-pins assertion honest.
+const LED_W_MM = 40 / 3.78; // SIZE KNOB (mm) — 10.58mm natural width
+const LED_F = +((LED_W_MM * 3.78) / 40).toFixed(4); // 1 at default
+const EXPECTED_LED_OFFSETS = {
+  anode: { x: +(25 * LED_F).toFixed(3), y: +(42 * LED_F).toFixed(3) },
+  cathode: { x: +(15 * LED_F).toFixed(3), y: +(42 * LED_F).toFixed(3) },
+};
+const BUTTON_W_MM = 67.28 / 3.78; // SIZE KNOB (mm) — 17.8mm natural width
+const BUTTON_F = +((BUTTON_W_MM * 3.78) / 67.28).toFixed(4); // 1 at default
+const EXPECTED_BUTTON_OFFSETS = {
+  leg1a: { x: 0, y: +(13 * BUTTON_F).toFixed(3) },
+  leg1b: { x: +(67 * BUTTON_F).toFixed(3), y: +(13 * BUTTON_F).toFixed(3) },
+  leg2a: { x: 0, y: +(32 * BUTTON_F).toFixed(3) },
+  leg2b: { x: +(67 * BUTTON_F).toFixed(3), y: +(32 * BUTTON_F).toFixed(3) },
+};
+
+// Element-backed part scale factors, mirroring each view's *_W_MM knob. The
+// parts' own live pinInfo stays at the NATURAL coordinates (the tables above
+// remain its mirror); the canvas MARKERS move to offset*F, so the
+// marker-honesty wants in steps 10/12/13/14 scale by these same factors.
+const STEPPER_W_MM = 80.892 / 3.78; // SIZE KNOB (mm) — 21.4mm natural width
+const STEPPER_F = +((STEPPER_W_MM * 3.78) / 80.892).toFixed(4); // 1 at default
+const PIR_W_MM = 90.72 / 3.78; // SIZE KNOB (mm) — 24mm natural width
+const PIR_F = +((PIR_W_MM * 3.78) / 90.72).toFixed(4); // 1 at default
+const POT_W_MM = 75.6 / 3.78; // SIZE KNOB (mm) — 20mm natural width
+const POT_F = +((POT_W_MM * 3.78) / 75.6).toFixed(4); // 1 at default
+const RES_W_MM = 59.14 / 3.78; // SIZE KNOB (mm) — 15.645mm natural width
+const RES_F = +((RES_W_MM * 3.78) / 59.14).toFixed(4); // 1 at default
+const ULTRA_W_MM = 170.1 / 3.78; // SIZE KNOB (mm) — 45mm natural width
+const ULTRA_F = +((ULTRA_W_MM * 3.78) / 170.1).toFixed(4); // 1 at default
+const SCALED_POT_OFFSETS = {
+  terminal1: { x: +(29 * POT_F).toFixed(3), y: +(68.5 * POT_F).toFixed(3) },
+  wiper: { x: +(39 * POT_F).toFixed(3), y: +(68.5 * POT_F).toFixed(3) },
+  terminal2: { x: +(49 * POT_F).toFixed(3), y: +(68.5 * POT_F).toFixed(3) },
+};
+const SCALED_RES_OFFSETS = {
+  terminal1: { x: 0, y: +(5.65 * RES_F).toFixed(3) },
+  terminal2: { x: +(58.8 * RES_F).toFixed(3), y: +(5.65 * RES_F).toFixed(3) },
+};
 
 // Sub-pixel pin alignment for the two static-asset components. Relay and
 // Transistor have no custom element and therefore no live `pinInfo`, so instead
@@ -533,21 +604,22 @@ const state = () =>
       ledSvg: shadowSvg('body-led', 'wokwi-led'),
       buttonSvg: shadowSvg('body-button', 'wokwi-pushbutton'),
       checks: [
-        check('led', 'anode', 25, 42),
-        check('led', 'cathode', 15, 42),
-        check('button', 'leg1a', 0, 13),
-        check('button', 'leg1b', 67, 13),
-        check('button', 'leg2a', 0, 32),
-        check('button', 'leg2b', 67, 32),
+        check('led', 'anode', ${EXPECTED_LED_OFFSETS.anode.x}, ${EXPECTED_LED_OFFSETS.anode.y}),
+        check('led', 'cathode', ${EXPECTED_LED_OFFSETS.cathode.x}, ${EXPECTED_LED_OFFSETS.cathode.y}),
+        check('button', 'leg1a', ${EXPECTED_BUTTON_OFFSETS.leg1a.x}, ${EXPECTED_BUTTON_OFFSETS.leg1a.y}),
+        check('button', 'leg1b', ${EXPECTED_BUTTON_OFFSETS.leg1b.x}, ${EXPECTED_BUTTON_OFFSETS.leg1b.y}),
+        check('button', 'leg2a', ${EXPECTED_BUTTON_OFFSETS.leg2a.x}, ${EXPECTED_BUTTON_OFFSETS.leg2a.y}),
+        check('button', 'leg2b', ${EXPECTED_BUTTON_OFFSETS.leg2b.x}, ${EXPECTED_BUTTON_OFFSETS.leg2b.y}),
         // Board pins map through the calibrated 3.78 px/mm scale (0.096012 px
-        // per Fritzing unit — the same 2.54mm pad pitch the Wokwi parts use).
-        check('board', 'GPIO0', 12.728, 6.091),
-        check('board', 'GPIO15', 195.156, 6.049),
-        check('board', 'GPIO16', 12.734, 73.257),
-        check('board', 'GPIO28', 137.549, 73.257),
-        check('board', '3V3_OUT', 156.752, 73.257),
-        check('board', 'GND', 31.936, 73.257),
-        check('board', 'GPIO17', 22.335, 73.257),
+        // per Fritzing unit — the same 2.54mm pad pitch the Wokwi parts use),
+        // scaled by the board's own size knob (BOARD_F).
+        check('board', 'GPIO0', ${+(12.728 * BOARD_F).toFixed(3)}, ${+(6.091 * BOARD_F).toFixed(3)}),
+        check('board', 'GPIO15', ${+(195.156 * BOARD_F).toFixed(3)}, ${+(6.049 * BOARD_F).toFixed(3)}),
+        check('board', 'GPIO16', ${+(12.734 * BOARD_F).toFixed(3)}, ${+(73.257 * BOARD_F).toFixed(3)}),
+        check('board', 'GPIO28', ${+(137.549 * BOARD_F).toFixed(3)}, ${+(73.257 * BOARD_F).toFixed(3)}),
+        check('board', '3V3_OUT', ${+(156.752 * BOARD_F).toFixed(3)}, ${+(73.257 * BOARD_F).toFixed(3)}),
+        check('board', 'GND', ${+(31.936 * BOARD_F).toFixed(3)}, ${+(73.257 * BOARD_F).toFixed(3)}),
+        check('board', 'GPIO17', ${+(22.335 * BOARD_F).toFixed(3)}, ${+(73.257 * BOARD_F).toFixed(3)}),
       ],
     };
   })()`);
@@ -562,11 +634,13 @@ const state = () =>
       JSON.stringify({ zoom: geo.zoomAttr, panX: geo.panX, panY: geo.panY })
   );
   assert(
-    geo.ledSvg && Math.abs(geo.ledSvg.w - 40) < 2 && Math.abs(geo.ledSvg.h - 50) < 2,
+    geo.ledSvg && Math.abs(geo.ledSvg.w - 40 * LED_F) < 2 && Math.abs(geo.ledSvg.h - 50 * LED_F) < 2,
     "wokwi-led must upgrade with its 40x50 shadow svg, got " + JSON.stringify(geo.ledSvg)
   );
   assert(
-    geo.buttonSvg && Math.abs(geo.buttonSvg.w - 67.28) < 3 && Math.abs(geo.buttonSvg.h - 45.35) < 3,
+    geo.buttonSvg &&
+      Math.abs(geo.buttonSvg.w - 67.28 * BUTTON_F) < 3 &&
+      Math.abs(geo.buttonSvg.h - 45.35 * BUTTON_F) < 3,
     "wokwi-pushbutton must upgrade with its ~67.28x45.35 shadow svg, got " + JSON.stringify(geo.buttonSvg)
   );
   for (const c of geo.checks) {
@@ -1214,7 +1288,7 @@ const state = () =>
     const aligns = info.map((pi) => {
       const m = document.querySelector('[data-testid="pin-placed-8-'+pi.name+'"] circle').getBoundingClientRect();
       const got = { x: (m.left + m.width / 2 - sr.left) / scale, y: (m.top + m.height / 2 - sr.top) / scale };
-      const want = { x: origin.x + pi.x, y: origin.y + pi.y };
+      const want = { x: origin.x + pi.x * ${STEPPER_F}, y: origin.y + pi.y * ${STEPPER_F} }; // markers follow the size knob
       return { name: pi.name, got, want, dx: got.x - want.x, dy: got.y - want.y };
     });
     return { elTag: el?.tagName.toLowerCase() ?? null, names: info.map((pi) => pi.name), byName, aligns };
@@ -1340,7 +1414,7 @@ const state = () =>
     const aligns = info.map((pi) => {
       const m = document.querySelector('[data-testid="pin-placed-1-'+pi.name+'"] circle').getBoundingClientRect();
       const got = { x: (m.left + m.width / 2 - sr.left) / scale, y: (m.top + m.height / 2 - sr.top) / scale };
-      const want = { x: origin.x + pi.x, y: origin.y + pi.y };
+      const want = { x: origin.x + pi.x * ${PIR_F}, y: origin.y + pi.y * ${PIR_F} }; // markers follow the size knob
       return { name: pi.name, got, want, dx: got.x - want.x, dy: got.y - want.y };
     });
     return { elTag: el?.tagName.toLowerCase() ?? null, names: info.map((pi) => pi.name), byName, aligns };
@@ -1497,9 +1571,9 @@ const state = () =>
     const resInfo = resEl?.pinInfo ?? [];
     const aligns = [];
     for (const [part, id, offsets] of [
-      ['pot', 'placed-2', { terminal1: { x: 29, y: 68.5 }, wiper: { x: 39, y: 68.5 }, terminal2: { x: 49, y: 68.5 } }],
-      ['res', 'placed-3', { terminal1: { x: 0, y: 5.65 }, terminal2: { x: 58.8, y: 5.65 } }],
-      ['cap', 'placed-4', { a: { x: 12.6, y: 57.6 }, b: { x: 30.6, y: 57.6 } }],
+      ['pot', 'placed-2', ${JSON.stringify(SCALED_POT_OFFSETS)}],
+      ['res', 'placed-3', ${JSON.stringify(SCALED_RES_OFFSETS)}],
+      ['cap', 'placed-4', ${JSON.stringify(EXPECTED_CAP_OFFSETS)}],
     ]) {
       const o = originOf(id);
       for (const [name, off] of Object.entries(offsets)) {
@@ -1646,7 +1720,7 @@ const state = () =>
     const aligns = info.map((pi) => {
       const m = document.querySelector('[data-testid="pin-placed-5-'+pi.name.toLowerCase()+'"] circle').getBoundingClientRect();
       const got = { x: (m.left + m.width / 2 - sr.left) / scale, y: (m.top + m.height / 2 - sr.top) / scale };
-      const want = { x: origin.x + pi.x, y: origin.y + pi.y };
+      const want = { x: origin.x + pi.x * ${ULTRA_F}, y: origin.y + pi.y * ${ULTRA_F} }; // markers follow the size knob
       return { name: pi.name, got, want, dx: got.x - want.x, dy: got.y - want.y };
     });
     return { elTag: el?.tagName.toLowerCase() ?? null, names: info.map((pi) => pi.name), byName, aligns };

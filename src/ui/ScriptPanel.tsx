@@ -6,7 +6,6 @@ export interface OutputEntry {
 }
 
 interface ScriptPanelProps {
-  output: OutputEntry[];
   onRun: (code: string) => void;
   onStop: () => void;
 }
@@ -33,57 +32,29 @@ led.value(1)
 # it) for python-driven output.
 `;
 
-export function ScriptPanel({ output, onRun, onStop }: ScriptPanelProps) {
+export function ScriptPanel({ onRun, onStop }: ScriptPanelProps) {
   const [code, setCode] = useState(DEFAULT_CODE);
 
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      <h2 style={{ margin: 0 }}>MicroPython</h2>
+    <section className="pane code-pane" aria-label="MicroPython editor">
+      <header className="pane-header">
+        <span className="pane-title">main.py</span>
+        <div className="pane-actions">
+          <button type="button" className="btn btn-run" onClick={() => onRun(code)}>
+            Run
+          </button>
+          <button type="button" className="btn btn-stop" onClick={onStop}>
+            Stop
+          </button>
+        </div>
+      </header>
       <textarea
         value={code}
         onChange={(e) => setCode(e.target.value)}
         spellCheck={false}
         aria-label="MicroPython code"
-        style={{
-          width: "100%",
-          height: 170,
-          fontFamily: "monospace",
-          fontSize: 12,
-          boxSizing: "border-box",
-        }}
+        className="code-editor"
       />
-      <div style={{ display: "flex", gap: "0.5rem" }}>
-        <button onClick={() => onRun(code)}>Run</button>
-        <button onClick={onStop}>Stop</button>
-      </div>
-      <h3 style={{ margin: 0 }}>Output</h3>
-      <pre
-        data-testid="output"
-        style={{
-          width: "100%",
-          minHeight: 120,
-          maxHeight: 240,
-          overflow: "auto",
-          margin: 0,
-          padding: "0.5rem",
-          background: "#111",
-          fontFamily: "monospace",
-          fontSize: 12,
-          whiteSpace: "pre-wrap",
-          boxSizing: "border-box",
-        }}
-      >
-        {output.length === 0
-          ? "—"
-          : output.map((o, i) => (
-              <div
-                key={i}
-                style={{ color: o.kind === "error" ? "#ff6b6b" : "#d7ffd9" }}
-              >
-                {o.text}
-              </div>
-            ))}
-      </pre>
     </section>
   );
 }

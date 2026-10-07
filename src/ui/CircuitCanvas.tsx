@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type { RenderInfo } from "../engine";
 import type { ComponentKind, PinRef, SnapshotMessage, TopologyConnection } from "../execution/messages";
 import type { PinMarkerStyle, PinOffsetMap, Vec } from "./types";
-import { COMPONENT_MIME } from "./ComponentPalette";
+import { COMPONENT_MIME, ComponentPicker } from "./ComponentPalette";
 import { ButtonView, buttonPinOffsets } from "./components/ButtonView";
 import { LedView, ledPinOffsets } from "./components/LedView";
 import { RelayView, relayPinOffsets } from "./components/RelayView";
@@ -75,11 +75,40 @@ const DRAG_THRESHOLD = 4;
 const STAGE_W = 4000;
 const STAGE_H = 2800;
 
-// The container is a fixed-size pannable/zoomable viewport over that stage.
-const VIEWPORT_H = 600;
+// The container is a flexible-height pannable/zoomable viewport over that
+// stage (the canvas column owns its height). Rulers draw a blueprint grid with
+// mm labels using the same 3.78 px/mm calibration as the component art.
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 3;
 const ZOOM_STEP = 1.1;
+const RULER_SIZE = 18;
+
+// Major/minor mm ticks for the top/left rulers. The step adapts to the zoom
+// so the pair stays legible (roughly 45px..120px apart) without churning out
+// hundreds of labels at any zoom level. Stage px -> mm is 3.78 px/mm.
+function viewRulerMarks(view: ViewState, length: number, isHorizontal: boolean): Array<{ pos: number; major: boolean; mm: number }> {
+  // Calculate the world‑space step (mm) that yields at least ~45px on screen
+  const pxPerMm = 3.78 * view.zoom;
+  const mmStep = [10, 25, 50].find((m) => m * pxPerMm >= 45) ?? 50;
+  const worldStep = mmStep * 3.78; // world (unscaled) pixels per major step
+  // World‑space visible range
+  const worldStart = (isHorizontal ? -view.pan.x : -view.pan.y) / view.zoom;
+  const worldEnd = worldStart + length / view.zoom;
+  const halfStep = worldStep / 2;
+  // Start a half‑step before the visible range to include a possible minor tick just off‑screen
+  const first = Math.ceil((worldStart - halfStep) / halfStep) * halfStep;
+  const marks: Array<{ pos: number; major: boolean; mm: number }> = [];
+  for (let posWorld = first; posWorld <= worldEnd; posWorld += halfStep) {
+    const screenPos = posWorld * view.zoom + (isHorizontal ? view.pan.x : view.pan.y);
+    if (screenPos < 0 || screenPos > length) continue; // optional clipping
+    const major = Math.abs(posWorld % worldStep) < 1e-6;
+    const mm = Math.round(posWorld / 3.78);
+    marks.push({ pos: screenPos, major, mm });
+  }
+  return marks;
+}
+
+
 
 interface ViewState {
   pan: Vec;
@@ -238,6 +267,11 @@ export function CircuitCanvas({
   const [draggingOver, setDraggingOver] = useState(false);
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
 
+  // The Wokwi-style parts menu ("+" button or `A`), and the blueprint grid +
+  // mm rulers (`G` toggles them together, like Wokwi's grid).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [showRulers, setShowRulers] = useState(true);
+
   // View state: the stage's pan offset (px) and zoom factor into the fixed
   // container viewport. 100% = the calibrated real-size scale; both reset on
   // reload because pan/zoom is intentionally session-only (docs/DECISIONS.md).
@@ -253,6 +287,25 @@ export function CircuitCanvas({
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+
+  const [viewportSize, setViewportSize] = useState<{ w: number; h: number }>({ w: 1240, h: 600 });
+
+  // ResizeObserver keeps viewportSize up‑to‑date for grid/rulers.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        setViewportSize({ w: Math.round(width) || 1240, h: Math.round(height) || 600 });
+      }
+    });
+    ro.observe(el);
+    // initial size
+    const rect = el.getBoundingClientRect();
+    setViewportSize({ w: Math.round(rect.width) || 1240, h: Math.round(rect.height) || 600 });
+    return () => ro.disconnect();
+  }, []);
 
   // In-progress empty-canvas pan. Pointer-down on the bare canvas (container
   // or stage, never a body/pin/wire) records the client origin and the pan at
@@ -345,6 +398,38 @@ export function CircuitCanvas({
       x: (clientX - (rect ? rect.left : 0) - view.pan.x) / view.zoom,
       y: (clientY - (rect ? rect.top : 0) - view.pan.y) / view.zoom,
     };
+  }
+
+  // ---- toolbar view controls ----
+
+  // Zoom about the viewport centre (falling back to the old fixed extents when
+  // the container measures 0, as in jsdom). Functional setView keeps rapid
+  // clicks accumulating correctly.
+  function zoomBy(factor: number) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const w = rect && rect.width > 0 ? rect.width : 1240;
+    const h = rect && rect.height > 0 ? rect.height : 600;
+    const cx = w / 2;
+    const cy = h / 2;
+    setView((v) => {
+      const sx = (cx - v.pan.x) / v.zoom;
+      const sy = (cy - v.pan.y) / v.zoom;
+      const zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v.zoom * factor));
+      return { pan: { x: cx - sx * zoom, y: cy - sy * zoom }, zoom };
+    });
+  }
+
+  function resetView() {
+    setView(BASE_VIEW);
+  }
+
+  // Wokwi-style placement: a part picked from the menu lands at the stage point
+  // under the viewport's top-left corner — diagram (0,0) at the default origin
+  // view — ready to be dragged into place.
+  function handlePlaceFromPicker(kind: ComponentKind) {
+    const cx = (viewportSize.w / 2 - view.pan.x) / view.zoom;
+    const cy = (viewportSize.h / 2 - view.pan.y) / view.zoom;
+    onPlaceComponent({ x: cx, y: cy }, kind);
   }
 
   // ---- empty-canvas pan (pointer events) ----
@@ -542,19 +627,31 @@ export function CircuitCanvas({
 
   useEffect(() => {
     // Delete/Backspace on the body (i.e. no canvas selection interactions in
-    // focus) removes the selected component. Typing the same keys inside a
-    // text field — the code editor, for example — must keep working untouched.
+    // focus) removes the selected component; `A` opens the parts picker and `G`
+    // toggles the grid + rulers — both Wokwi shortcuts. Typing the same keys
+    // inside a text field — the code editor, for example — must keep working
+    // untouched.
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Delete" && e.key !== "Backspace") return;
       const el = document.activeElement;
-      if (
+      const typing =
         el instanceof HTMLElement &&
-        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)
-      ) {
+        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (typing) return;
+        e.preventDefault();
+        deleteSelectedRef.current();
         return;
       }
-      e.preventDefault();
-      deleteSelectedRef.current();
+      if (typing) return;
+      if (e.key === "a" || e.key === "A") {
+        e.preventDefault();
+        setPickerOpen((open) => !open);
+        return;
+      }
+      if (e.key === "g" || e.key === "G") {
+        e.preventDefault();
+        setShowRulers((on) => !on);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -563,59 +660,140 @@ export function CircuitCanvas({
   const pendingPinId = pendingPin ? `${pendingPin.componentId}:${pendingPin.pinLabel}` : null;
 
   return (
-    <div
-      ref={containerRef}
-      data-testid="circuit-canvas"
-      data-zoom={view.zoom}
-      data-pan-x={view.pan.x}
-      data-pan-y={view.pan.y}
-      style={{
-        position: "relative",
-        background: "#f7f7f9",
-        border: draggingOver ? "2px dashed #1f8aff" : "1px solid #d0d0d4",
-        borderRadius: 4,
-        overflow: "hidden",
-        height: VIEWPORT_H,
-        userSelect: "none",
-      }}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDraggingOver(true);
-      }}
-      onDragEnter={() => setDraggingOver(true)}
-      onDragLeave={() => setDraggingOver(false)}
-      onDrop={handleDrop}
-      onPointerDown={handleContainerPointerDown}
-      onClick={(e) => {
-        // A click landing on the bare canvas (container or stage, not on a
-        // body/pin/wire) clears the selection. Overlays are pointer-events:none
-        // so empty-canvas clicks resolve their target to the stage/container.
-        if (e.target === containerRef.current || e.target === stageRef.current) {
-          updateSelection(null);
-        }
-      }}
-      onPointerMove={handleContainerPointerMove}
-      onPointerUp={handleContainerPointerUp}
-      onPointerCancel={handleContainerPointerCancel}
-    >
-      {/* LAYER 1 — component bodies. HTML absolutely-positioned at stage
-           coords, so each view can render a real web component (<wokwi-led>,
-           <wokwi-pushbutton>) or an SVG (board). The wrapper div carries the
-           drag-to-move handlers (body-only: pin circles live in layer 3). */}
+    <div className="canvas-shell">
+      <div className="canvas-toolbar">
+        <div className="toolbar-left">
+          <div className="picker-anchor">
+            <button
+              type="button"
+              data-testid="add-part"
+              aria-haspopup="listbox"
+              aria-expanded={pickerOpen}
+              className="btn btn-primary add-part-btn"
+              onClick={() => setPickerOpen((open) => !open)}
+            >
+              <span className="add-part-plus" aria-hidden>
+                +
+              </span>
+              Add part
+            </button>
+            <ComponentPicker
+              open={pickerOpen}
+              onClose={() => setPickerOpen(false)}
+              onPlace={handlePlaceFromPicker}
+            />
+          </div>
+        </div>
+        <div className="toolbar-right">
+          <span className="zoom-readout" aria-label={`Zoom ${Math.round(view.zoom * 100)}%`}>
+            {Math.round(view.zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Zoom out"
+            onClick={() => zoomBy(1 / ZOOM_STEP)}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Zoom in"
+            onClick={() => zoomBy(ZOOM_STEP)}
+          >
+            +
+          </button>
+          <div className="toolbar-divider" />
+          <button
+            type="button"
+            className="btn"
+            onClick={resetView}
+            title="Reset the view to 100%, origin"
+          >
+            reset
+          </button>
+          <button
+            type="button"
+            className={showRulers ? "btn is-active" : "btn"}
+            aria-pressed={showRulers}
+            onClick={() => setShowRulers((on) => !on)}
+            title="Toggle grid and rulers (G)"
+          >
+            grid
+          </button>
+          {canDeleteSelected && (
+            <button
+              type="button"
+              className="btn"
+              data-testid="delete-component"
+              onClick={handleDeleteSelected}
+            >
+              Delete
+            </button>
+          )}
+        </div>
+      </div>
+
       <div
-        ref={stageRef}
-        data-testid="circuit-stage"
-        data-layer="bodies"
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: STAGE_W,
-          height: STAGE_H,
-          transformOrigin: "top left",
-          transform: `translate(${view.pan.x}px, ${view.pan.y}px) scale(${view.zoom})`,
+        ref={containerRef}
+        data-testid="circuit-canvas"
+        data-zoom={view.zoom}
+        data-pan-x={view.pan.x}
+        data-pan-y={view.pan.y}
+        className={draggingOver ? "canvas-viewport canvas-viewport-dragging" : "canvas-viewport"}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDraggingOver(true);
         }}
+        onDragEnter={() => setDraggingOver(true)}
+        onDragLeave={() => setDraggingOver(false)}
+        onDrop={handleDrop}
+        onPointerDown={handleContainerPointerDown}
+        onClick={(e) => {
+          // A click landing on the bare canvas (container or stage, not on a
+          // body/pin/wire) clears the selection. Overlays are pointer-events:none
+          // so empty-canvas clicks resolve their target to the stage/container.
+          if (e.target === containerRef.current || e.target === stageRef.current) {
+            updateSelection(null);
+          }
+        }}
+        onPointerMove={handleContainerPointerMove}
+        onPointerUp={handleContainerPointerUp}
+        onPointerCancel={handleContainerPointerCancel}
       >
+        {/* LAYER 0 — infinite grid (if enabled) */}
+        {showRulers && (
+          <div
+            data-layer="grid"
+            className="grid-layer"
+            style={{
+              position: "absolute",
+              inset: 0,
+              pointerEvents: "none",
+              backgroundImage: "radial-gradient(circle, var(--grid-dot) 1px, transparent 1.25px)",
+              backgroundSize: `${42 * view.zoom}px ${42 * view.zoom}px`,
+              // Positive modulo ensures offset stays within [0, cell)
+              backgroundPosition: `${((view.pan.x % (42 * view.zoom)) + (42 * view.zoom)) % (42 * view.zoom)}px ${((view.pan.y % (42 * view.zoom)) + (42 * view.zoom)) % (42 * view.zoom)}px`,
+            }}
+          />
+        )}
+        {/* LAYER 1 — component bodies. */}
+        <div
+          ref={stageRef}
+          data-testid="circuit-stage"
+          data-layer="bodies"
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: STAGE_W,
+            height: STAGE_H,
+            transformOrigin: "top left",
+            transform: `translate(${view.pan.x}px, ${view.pan.y}px) scale(${view.zoom})`,
+            // background grid moved to LAYER 0
+          }}
+        >
         {snapshot.components.map((c) => (
           <div
             key={c.id}
@@ -756,20 +934,56 @@ style={{
         })}
       </svg>
 
+        {showRulers && (
+          <>
+            {/* Top ruler – viewport width */}
+            <svg
+              className="canvas-ruler"
+              data-layer="ruler-x"
+              width={viewportSize.w}
+              height={RULER_SIZE}
+              style={{ left: 0, top: 0, position: "absolute" }}
+            >
+              <line x1={0} y1={0} x2={viewportSize.w} y2={0} stroke="var(--line-strong)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+              {viewRulerMarks(view, viewportSize.w, true).map((m) => (
+                <g key={m.pos}>
+                  <line x1={m.pos} y1={0} x2={m.pos} y2={m.major ? 10 : 5} stroke="var(--line-strong)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                  {m.major && (
+                    <text x={m.pos + 4} y={14} fontSize={9.5} fill="var(--ink-3)" fontFamily="IBM Plex Mono, monospace">
+                      {m.mm}
+                    </text>
+                  )}
+                </g>
+              ))}
+            </svg>
+            {/* Left ruler – viewport height */}
+            <svg
+              className="canvas-ruler"
+              data-layer="ruler-y"
+              width={RULER_SIZE}
+              height={viewportSize.h}
+              style={{ left: 0, top: 0, position: "absolute" }}
+            >
+              <line x1={0} y1={0} x2={0} y2={viewportSize.h} stroke="var(--line-strong)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+              {viewRulerMarks(view, viewportSize.h, false).map((m) => (
+                <g key={m.pos}>
+                  <line x1={0} y1={m.pos} x2={m.major ? 10 : 5} y2={m.pos} stroke="var(--line-strong)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                  {m.major && (
+                    <g transform={`translate(12 ${m.pos})`}>
+                      <text transform="rotate(90)" fontSize={9.5} fill="var(--ink-3)" fontFamily="IBM Plex Mono, monospace">
+                        {m.mm}
+                      </text>
+                    </g>
+                  )}
+                </g>
+              ))}
+            </svg>
+          </>
+        )}
+
+
       {conflictedWireCount > 0 && (
-        <div
-          role="status"
-          data-testid="conflict-banner"
-          style={{
-            marginTop: "0.5rem",
-            padding: "0.4rem 0.75rem",
-            background: "#ffe3e3",
-            color: "#a40000",
-            border: "1px solid #a40000",
-            borderRadius: 4,
-            fontWeight: 600,
-          }}
-        >
+        <div role="status" data-testid="conflict-banner" className="conflict-banner">
           ⚠{" "}
           {conflictedWireCount === 1
             ? "1 wire conflict"
@@ -777,26 +991,7 @@ style={{
           — multiple outputs are driving the same connection
         </div>
       )}
-      {canDeleteSelected && (
-        <button
-          data-testid="delete-component"
-          onClick={handleDeleteSelected}
-          style={{
-            position: "absolute",
-            top: 12,
-            right: 12,
-            padding: "0.35rem 0.75rem",
-            background: "#ffe3e3",
-            border: "1px solid #a40000",
-            borderRadius: 4,
-            color: "#a40000",
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          Delete
-        </button>
-      )}
+      </div>
     </div>
   );
 }

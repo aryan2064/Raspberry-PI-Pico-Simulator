@@ -10,8 +10,15 @@ import type { PinOffsetMap } from "../types";
 // the reactive-property layer rewritten for useDefineForClassFields: true.
 // The engine's unipolar step tables stay the single source of truth; the
 // element merely reflects angleDegrees via its `angle` property + a red arrow.
-export const STEPPER_W = 80.892;
-export const STEPPER_H = 96.012;
+// The vendored element renders its shadow SVG at a natural 80.892x96.012px.
+// The rendered width in mm is the SIZE KNOB: bump STEPPER_W_MM and every
+// derived constant follows, so the default stays byte-identical to the natural.
+export const STEPPER_W_MM = (80.892 / 3.78) - 0; // SIZE KNOB (mm) — 21.4mm natural width
+const STEPPER_NATURAL_W = 80.892;
+const STEPPER_NATURAL_H = 96.012;
+const STEPPER_F = +((STEPPER_W_MM * 3.78) / STEPPER_NATURAL_W).toFixed(4); // 1 at default
+export const STEPPER_W = +((STEPPER_NATURAL_W * STEPPER_F).toFixed(3));
+export const STEPPER_H = +((STEPPER_NATURAL_H * STEPPER_F).toFixed(3));
 
 const MOTOR_SIZE: StepperMotorElement["size"] = 8;
 const MOTOR_ARROW = "#c62828";
@@ -22,14 +29,15 @@ const MOTOR_ARROW = "#c62828";
 //   pitch = 2.54 * mmToPix                      = 9.6012
 // giving in1..gnd along the bottom-face lead strip. The canvas markers sit on
 // these exact coordinates, and browser-verify asserts they match the live
-// element's `pinInfo` to sub-pixel tolerance.
+// element's `pinInfo` to sub-pixel tolerance. Scaled by STEPPER_F so the
+// markers follow the resized art.
 export const stepperPinOffsets: PinOffsetMap = {
-  in1: { x: 15.553, y: 96.012 },
-  in2: { x: 25.1542, y: 96.012 },
-  in3: { x: 34.7554, y: 96.012 },
-  in4: { x: 44.3566, y: 96.012 },
-  vcc: { x: 53.9578, y: 96.012 },
-  gnd: { x: 63.559, y: 96.012 },
+  in1: { x: +(15.553 * STEPPER_F).toFixed(3), y: +(96.012 * STEPPER_F).toFixed(3) },
+  in2: { x: +(25.1542 * STEPPER_F).toFixed(3), y: +(96.012 * STEPPER_F).toFixed(3) },
+  in3: { x: +(34.7554 * STEPPER_F).toFixed(3), y: +(96.012 * STEPPER_F).toFixed(3) },
+  in4: { x: +(44.3566 * STEPPER_F).toFixed(3), y: +(96.012 * STEPPER_F).toFixed(3) },
+  vcc: { x: +(53.9578 * STEPPER_F).toFixed(3), y: +(96.012 * STEPPER_F).toFixed(3) },
+  gnd: { x: +(63.559 * STEPPER_F).toFixed(3), y: +(96.012 * STEPPER_F).toFixed(3) },
 };
 
 interface StepperArtProps {
@@ -59,7 +67,16 @@ export function StepperArt({ angleDegrees }: StepperArtProps) {
     <div style={{ position: "relative", width: STEPPER_W, height: STEPPER_H }}>
       {/* Vendored motor (registered in main.tsx, browser only). In jsdom tests it
           is an unrecognised tag — harmless, nothing reads its shadow DOM. */}
-      <app-stepper-motor ref={motorRef} size={MOTOR_SIZE} />
+      <div
+        style={{
+          width: STEPPER_NATURAL_W,
+          height: STEPPER_NATURAL_H,
+          transform: `scale(${STEPPER_F})`,
+          transformOrigin: "top left",
+        }}
+      >
+        <app-stepper-motor ref={motorRef} size={MOTOR_SIZE} />
+      </div>
     </div>
   );
 }

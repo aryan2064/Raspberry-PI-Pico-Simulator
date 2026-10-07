@@ -10,25 +10,31 @@ import type { PinOffsetMap } from "../types";
 // machinery and drive its `knobPosition` property (0..1) from the engine
 // snapshot. The knob TURN itself is a DRAG on an overlay in THIS view (the
 // element is purely presentational).
-export const POT_W = 75.6; // 20mm @ 3.78 px/mm (the element's natural size)
-export const POT_H = 75.6;
+export const POT_W_MM = 75.6 / 3.78; // SIZE KNOB (mm) — 20mm natural width
+const POT_NATURAL_W = 75.6;
+const POT_NATURAL_H = 75.6;
+const POT_F = +((POT_W_MM * 3.78) / POT_NATURAL_W).toFixed(4); // 1 at default
+export const POT_W = +((POT_NATURAL_W * POT_F).toFixed(3)); // 20mm @ 3.78 px/mm (the element's natural size)
+export const POT_H = +((POT_NATURAL_H * POT_F).toFixed(3));
 
 // Pin offsets, straight from the vendored source's own pinInfo — the three
 // lead tips poking out of the bottom face, in element order GND-SIG-VCC
 // (left-to-right). The canvas markers sit on these exact coordinates and
 // browser-verify asserts they match the live element's `pinInfo`:
 //   GND (29, 68.5)  SIG (39, 68.5)  VCC (49, 68.5)
+// Scaled by POT_F so the markers follow the resized art.
 export const potPinOffsets: PinOffsetMap = {
-  terminal1: { x: 29, y: 68.5 },
-  wiper: { x: 39, y: 68.5 },
-  terminal2: { x: 49, y: 68.5 },
+  terminal1: { x: +(29 * POT_F).toFixed(3), y: +(68.5 * POT_F).toFixed(3) },
+  wiper: { x: +(39 * POT_F).toFixed(3), y: +(68.5 * POT_F).toFixed(3) },
+  terminal2: { x: +(49 * POT_F).toFixed(3), y: +(68.5 * POT_F).toFixed(3) },
 };
 
 // Knob geometry in natural pixel units (element viewBox 0..20 x 0..20, scaled
-// to a 75.6px face; knob center (9.91, 8.18), rx/ry ~7.27/7.43).
-const KNOB_CX = 9.91 * 3.78;
-const KNOB_CY = 8.18 * 3.78;
-const KNOB_R = 7.43 * 3.78;
+// to a 75.6px face; knob center (9.91, 8.18), rx/ry ~7.27/7.43), scaled by
+// POT_F so the drag surface rides the resized knob ellipse.
+const KNOB_CX = 9.91 * 3.78 * POT_F;
+const KNOB_CY = 8.18 * 3.78 * POT_F;
+const KNOB_R = 7.43 * 3.78 * POT_F;
 
 // One full sweep of the knob maps to this many CLIENT pixels of vertical drag
 // (dragging up turns it "up", like turning a min->max pot counter-clockwise to
@@ -49,7 +55,16 @@ export function PotentiometerArt({ knobPosition }: { knobPosition: number }) {
     <div style={{ position: "relative", width: POT_W, height: POT_H }}>
       {/* Vendored pot (registered in main.tsx, browser only). In jsdom tests it
           is an unrecognised tag — harmless, nothing reads its shadow DOM. */}
-      <app-potentiometer ref={potRef} />
+      <div
+        style={{
+          width: POT_NATURAL_W,
+          height: POT_NATURAL_H,
+          transform: `scale(${POT_F})`,
+          transformOrigin: "top left",
+        }}
+      >
+        <app-potentiometer ref={potRef} />
+      </div>
     </div>
   );
 }

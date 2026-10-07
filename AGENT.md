@@ -89,11 +89,11 @@ that's the one rule this project cannot bend on. See
       (real-Pyodide end-to-end; run with `npm run verify:python`).
       `src/test/setup.ts` patches jsdom's missing `crypto.randomUUID`
       (the engine's `newId()`), registered via `test.setupFiles`.
-Current totals: **160 passing + 1 skipped** (18 Circuit / 7
+Current totals: **169 passing + 1 skipped** (18 Circuit / 7
 PicoBoard / 7 analog / 6 LedBrightness / 6 button / 5 relay /
 4 transistor / 6 stepper / 5 PIRSensor / 3 Potentiometer /
 3 Resistor / 5 Capacitor / 7 UltrasonicSensor / 35 CircuitHost /
-34 canvas / 9 App; Pyodide.integration skipped by default — run it
+43 canvas / 9 App; Pyodide.integration skipped by default — run it
 with `npm run verify:python`).
 - [x] Analog value channel on `Pin` (`analogValue: number | null`, 0–1
       duty for OUT pins) + analog propagation step in `Circuit.tick()`,
@@ -486,6 +486,26 @@ tag; the three leads are relabeled `vcc`/`out`/`gnd` with the
        `browser-verify.mjs` step 14 (real Python TRIG/ECHO over
        GPIO9/GPIO10 measuring 300/360 cm to the µs + NO_ECHO at the
        null-stop).
+- [x] **Wokwi-style UI polish** ("Blueprinted Bench", applied from the
+       installed `frontend-design` / `designing-frontend-interfaces`
+       opencode skills — token layer before component code):
+       code editor left, canvas **+ output console right**, parts added
+       through the blue **"+" button / `A` key** picker (land at the
+       stage point under the viewport's top-left, then dragged). Chrome:
+       `index.css` token layer (IBM Plex Sans + IBM Plex Mono, one
+       `#1f8aff` accent, 4px space scale) + `.app-shell`/`.topbar`/
+       `.workspace`/`.pane`/`.console` classes; `ComponentPalette` →
+       `ComponentPicker` (popover `role="listbox"`, items always
+       mounted); `ScriptPanel` editor-only; new `OutputConsole`
+       (`data-testid="output"` below the canvas); canvas toolbar with
+       zoom −/+ (1.1×, clamp 0.25–3, window-centered), reset view, grid +
+       mm ruler toggle (`G`, ticks at 3.78 px/mm, on by default), and
+       Delete (moved into the toolbar, disabled without a selection).
+       Drag-and-drop (`COMPONENT_MIME` + canvas `handleDrop`) kept as a
+       hidden compat path so every existing drop jsdom test and
+       browser-verify drag step is untouched. Gates green: typecheck,
+       **169 pass + 1 skipped**, build, browser-verify ALL CHECKS PASS
+       (sub-pixel pin asserts intact on every part).
 - [ ] Validation / error states beyond conflict detection (undeclared
        pins, unmapped Python pin numbers, etc.) — not started.
 - [ ] Component library beyond LED/Button/Relay/Transistor/Stepper/PIR/Potentiometer/Resistor/Capacitor/Ultrasonic — not

@@ -10,8 +10,16 @@ import type { PinOffsetMap } from "../types";
 // display property (dome/lens glow warm amber/red) and the three leads
 // relabeled vcc/out/gnd. The engine's hold timer is the single source of
 // truth; the element merely mirrors the trigger state it is given.
-export const PIR_W = 90.72; // 24mm @ 3.78 px/mm
-export const PIR_H = 92.41; // 24.448mm @ 3.78 px/mm
+// The vendored element renders its shadow SVG at a natural 90.72x92.41px
+// (24mm x 24.448mm @ 3.78 px/mm). The rendered width in mm is the SIZE KNOB:
+// bump PIR_W_MM and every derived constant follows, so the default stays
+// byte-identical to the natural art.
+export const PIR_W_MM = 90.72 / 3.78; // SIZE KNOB (mm) — 24mm natural width
+const PIR_NATURAL_W = 90.72;
+const PIR_NATURAL_H = 92.41;
+const PIR_F = +((PIR_W_MM * 3.78) / PIR_NATURAL_W).toFixed(4); // 1 at default
+export const PIR_W = +((PIR_NATURAL_W * PIR_F).toFixed(3)); // 24mm @ 3.78 px/mm
+export const PIR_H = +((PIR_NATURAL_H * PIR_F).toFixed(3)); // 24.448mm @ 3.78 px/mm
 
 // Pin offsets, straight from the modified source's own pinInfo — the three
 // lead tips on the bottom face of the 90.7x92.4 viewBox, in module order
@@ -19,10 +27,11 @@ export const PIR_H = 92.41; // 24.448mm @ 3.78 px/mm
 //   vcc: x=36.178  out: x=45.9175  gnd: x=55.6415  (all y=92)
 // The canvas markers sit on these exact coordinates, and browser-verify
 // asserts they match the live element's `pinInfo` to sub-pixel tolerance.
+// Scaled by PIR_F so the markers follow the resized art.
 export const pirPinOffsets: PinOffsetMap = {
-  vcc: { x: 36.178, y: 92 },
-  out: { x: 45.9175, y: 92 },
-  gnd: { x: 55.6415, y: 92 },
+  vcc: { x: +(36.178 * PIR_F).toFixed(3), y: +(92 * PIR_F).toFixed(3) },
+  out: { x: +(45.9175 * PIR_F).toFixed(3), y: +(92 * PIR_F).toFixed(3) },
+  gnd: { x: +(55.6415 * PIR_F).toFixed(3), y: +(92 * PIR_F).toFixed(3) },
 };
 
 // Component body art: the vendored PIR element alone. `motionActive` is
@@ -39,7 +48,16 @@ export function PIRArt({ motionActive }: { motionActive: boolean }) {
     <div style={{ position: "relative", width: PIR_W, height: PIR_H }}>
       {/* Vendored PIR (registered in main.tsx, browser only). In jsdom tests it
           is an unrecognised tag — harmless, nothing reads its shadow DOM. */}
-      <app-pir-motion-sensor ref={pirRef} />
+      <div
+        style={{
+          width: PIR_NATURAL_W,
+          height: PIR_NATURAL_H,
+          transform: `scale(${PIR_F})`,
+          transformOrigin: "top left",
+        }}
+      >
+        <app-pir-motion-sensor ref={pirRef} />
+      </div>
     </div>
   );
 }

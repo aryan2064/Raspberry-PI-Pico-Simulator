@@ -6,19 +6,28 @@ import type { PinOffsetMap } from "../types";
 // a purely static SVG with zero interaction handlers and no state properties
 // the engine must drive, so it is exactly the Resistor situation: passive art
 // under an overlay. See docs/DECISIONS.md ("Ultrasonic Sensor").
-export const ULTRA_W = 170.1; // 45mm @ 3.78 px/mm (the element's natural size)
-export const ULTRA_H = 94.5; // 25mm @ 3.78 px/mm
+// The wokwi-hc-sr04 element renders its shadow SVG at a natural 170.1x94.5px
+// (45mm x 25mm @ 3.78 px/mm). The rendered width in mm is the SIZE KNOB: bump
+// ULTRA_W_MM and every derived constant follows, so the default stays
+// byte-identical to the natural art.
+export const ULTRA_W_MM = 170.1 / 3.78; // SIZE KNOB (mm) — 45mm natural width
+const ULTRA_NATURAL_W = 170.1;
+const ULTRA_NATURAL_H = 94.5;
+const ULTRA_F = +((ULTRA_W_MM * 3.78) / ULTRA_NATURAL_W).toFixed(4); // 1 at default
+export const ULTRA_W = +((ULTRA_NATURAL_W * ULTRA_F).toFixed(3)); // 45mm @ 3.78 px/mm (the element's natural size)
+export const ULTRA_H = +((ULTRA_NATURAL_H * ULTRA_F).toFixed(3)); // 25mm @ 3.78 px/mm
 
 // Pin offsets, straight from the package element's own pinInfo — the four
 // header pins in module order VCC-TRIG-ECHO-GND along the bottom face:
 //   vcc (71.3, 94.5)  trig (81.3, 94.5)  echo (91.3, 94.5)  gnd (101.3, 94.5).
 // The canvas markers sit on these exact coordinates and browser-verify asserts
-// they match the live element's `pinInfo` to sub-pixel tolerance.
+// they match the live element's `pinInfo` to sub-pixel tolerance. Scaled by
+// ULTRA_F so the markers follow the resized art.
 export const ultrasonicPinOffsets: PinOffsetMap = {
-  vcc: { x: 71.3, y: 94.5 },
-  trig: { x: 81.3, y: 94.5 },
-  echo: { x: 91.3, y: 94.5 },
-  gnd: { x: 101.3, y: 94.5 },
+  vcc: { x: +(71.3 * ULTRA_F).toFixed(3), y: +(94.5 * ULTRA_F).toFixed(3) },
+  trig: { x: +(81.3 * ULTRA_F).toFixed(3), y: +(94.5 * ULTRA_F).toFixed(3) },
+  echo: { x: +(91.3 * ULTRA_F).toFixed(3), y: +(94.5 * ULTRA_F).toFixed(3) },
+  gnd: { x: +(101.3 * ULTRA_F).toFixed(3), y: +(94.5 * ULTRA_F).toFixed(3) },
 };
 
 // Component body art: the published element alone. Exported for the palette
@@ -29,7 +38,16 @@ export function UltrasonicArt() {
       {/* Published wokwi element (registered via main.tsx's `import
           "@wokwi/elements"`; browser only). In jsdom tests it is an
           unrecognised tag — harmless, nothing reads its shadow DOM. */}
-      <wokwi-hc-sr04 />
+      <div
+        style={{
+          width: ULTRA_NATURAL_W,
+          height: ULTRA_NATURAL_H,
+          transform: `scale(${ULTRA_F})`,
+          transformOrigin: "top left",
+        }}
+      >
+        <wokwi-hc-sr04 />
+      </div>
     </div>
   );
 }

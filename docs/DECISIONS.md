@@ -1343,6 +1343,38 @@ Every re-derived offset was verified by node probes and re-asserted
 sub-pixel in browser-verify steps 9 and 14 before the pan/zoom work; each
 view's header comment names its datasheet/part source and formula.
 
+**Size knobs (human-legibility, all 11 parts).** Every component exposes one
+**rendered-width knob in mm** at its view's top:
+
+| part | knob | default | single line that records it |
+|---|---|---|---|
+| board | `PICO_BOARD_W_MM` | 83.01 (53.01 true + 30 loaded) | `PicoBoardView.tsx` (also drives `SCALE`, so pads stay on the art) |
+| relay | `RELAY_W_MM` | 40 (38 real + 2 loaded) | `RelayView.tsx` (height + all pins derive from `RELAY_W`) |
+| transistor | `TRANSISTOR_W_MM` | 7.83 (5.83 real + 2 loaded) | `TransistorView.tsx` (height + leads derive from `TRANSISTOR_W`) |
+| capacitor | `CAP_W_MM` | (43.2/3.78) + 7 (18.43) | `CapacitorView.tsx` (`CAP_SCALE` = art k-multiplier; a/b offsets use it, not a hardcoded 0.9) |
+| led | `LED_W_MM` | 40/3.78 | `LedView.tsx` (natural 40×50 shadow svg; element `scale(${LED_F})` + wrapper sized) |
+| button | `BUTTON_W_MM` | 67.28/3.78 | `ButtonView.tsx` (natural ~67.28×45.35 shadow svg; element `scale(${BUTTON_F})`) |
+| resistor | `RESISTOR_W_MM` | 59.14/3.78 | `ResistorView.tsx` (natural 59.14×11.34 shadow svg) |
+| potentiometer | `POT_W_MM` | 75.6/3.78 | `PotentiometerView.tsx` (also scales `KNOB_CX/CY/R`; drag overlay rides the knob) |
+| stepper | `STEPPER_W_MM` | 80.892/3.78 | `StepperMotorView.tsx` (natural 80.892×96.012 shadow svg) |
+| pir | `PIR_W_MM` | 90.72/3.78 | `PIRSensorView.tsx` (natural 90.72×92.41 shadow svg) |
+| ultrasonic | `ULTRA_W_MM` | 170.1/3.78 | `UltrasonicSensorView.tsx` (natural 170.1×94.5 shadow svg; distance slider is a client-px overlay and stays put) |
+
+**Uniform rule:** an instruction "increment X by +N mm" means the rendered
+width grows by exactly `N·3.78 px`; height, artwork, and pin offsets scale by
+`f = (W_mm + N)/W_mm`, aspect preserved, pins glued to pads. The element-backed
+parts (led/button/resistor/pot/stepper/pir/ultra) are scaled with a CSS
+`transform: scale(f)` at the element's top-left inside a `natural·f` wrapper
+(so the scaled box is the hit/drag area), and every pin-offset export and each
+interaction overlay that lives in art units (pot knob) multiplies by the same
+`f`; the ultrasonic slider and pot `KNOB_TRAVEL` are client-pixel overlays and
+stay independent. `scripts/browser-verify.mjs` mirrors the same knobs and
+derives every expected offset from them, so a bump is a one-number edit per
+part and steps 9/13/15 still prove the markers land on the (now larger) art;
+element parts' own live `pinInfo` remains the natural-coordinate record the
+mirror tables assert against. This sizing overrides strict physical mm for
+legibility; the px figures quoted above remain the calibration records.
+
 ---
 
 **The canvas is a 4000×2800 stage: empty-canvas drag pans, wheel zoom is cursor-centered (×0.25–×3), precedence is pin-click → body-click/drag → pan → wheel, reset on reload**
@@ -1400,3 +1432,50 @@ Full gates: `npm run typecheck` (clean), `npm run test` (169 pass, 1
 skipped — 43 in CircuitCanvas), `npm run build`, and `node
 scripts/browser-verify.mjs` ALL CHECKS PASS against the dev server — now
 including the pan/zoom step 15.
+
+### Wokwi-style UI layout & chrome
+
+We re-skinned the app as a Wokwi-like workbench ("Blueprinted Bench"):
+**code on the left, canvas on the right, output console under the
+canvas** (that console placement was the user's call over the console-in-
+a-tab alternative). Parts are added via a blue **"+" button (or `A` key)**
+in the canvas toolbar — a popover picker instead of a permanent side
+palette — landing at the stage point under the viewport's top-left
+(`-pan/zoom`, Wokwi's "added at the diagram origin") and then dragged.
+`G` toggles the mm ruler + dot grid (both on by default); the −/+ buttons
+zoom 1.1× (clamped 0.25–3, centered on the window like the wheel) and a
+reset button restores the base view. Delete lives in the toolbar
+(disabled with no selection) rather than floating on the canvas.
+
+Why: reuse Wokwi's muscle memory; the editor becomes the dominant left
+pane and the canvas keeps all its chrome in one slim toolbar. Specifics
+that keep the old behavior assertion-safe:
+- The palette became a **popover picker, but its `<li>` items stay
+  always-mounted** (hidden attribute, never unmounted) so the `palette-*`
+  testids exist whether open or closed — jsdom + browser-verify palette
+  queries don't depend on popover state.
+- The native drag-and-drop path (`COMPONENT_MIME` + canvas `handleDrop` +
+  exact drop coordinates) was **kept as a hidden compat input**; the
+  picker dispatches the same place request. Every existing drop jsdom
+  test and all four browser-verify `DragEvent('drop')` steps are
+  untouched.
+- Rulers are two absolutely-positioned SVGs over the stage, panned/zoomed
+  with the view (drawn in stage space, `vectorEffect="non-scaling-stroke"`),
+  mm labels = px / 3.78. The grid is a `radial-gradient` dot field at
+  42px shown whenever rulers are on.
+- `data-testid`s that must never move: `circuit-canvas`, `circuit-stage`,
+  `component-palette`, `palette-*`, `output`, `worker-issue`,
+  `conflict-banner`, `delete-component`, `add-part` (new), plus the
+  body/pin/wire ids. Run/Stop must stay the literal strings "Run"/"Stop"
+  (browser-verify finds them by text) and a `<textarea>` must exist
+  (editor queries).
+
+**Size-knob sync rule (learned the hard way this session):** every
+`*_W_MM` knob in `src/ui/components/*View.tsx` has a **twin mirror
+constant in `browser-verify.mjs`**, and both must stay byte-identical —
+browser-verify asserts every part's pin geometry sub-pixel against the
+mirror. Stray experiment bumps (LED +1mm, resistor +2mm, ultrasonic
+−1mm) had been left in the views without touching the mirrors and
+tripped step 13 (`res-terminal2` off by 7.5px, `ultra` −1); they were
+reverted so view = mirror again. When tuning a knob, bump the view
+constant AND its mirror together, then rerun all four gates.
